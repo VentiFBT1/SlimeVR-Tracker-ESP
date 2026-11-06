@@ -692,13 +692,10 @@ void Connection::update() {
 	if (len >= 13 && static_cast<ReceivePacketType>(m_Packet[0])
 			== ReceivePacketType::Handshake
 		&& memcmp(m_Packet + 1, "Hey OVR =D 5", 12) == 0) {
-		if (m_UDP.remoteIP() == m_ServerHost) {
-			m_ServerPort = m_UDP.remotePort();
-			m_LastPacketTimestamp = millis();
-			m_Logger.info("Server handshake refreshed connection");
-		} else {
-			m_Logger.warn("Ignoring handshake from a different server");
-		}
+		// A second tracker joining may trigger another discovery handshake.
+		// Keep the established server endpoint unchanged while connected.
+		// Only normal server packets should refresh the connection timeout.
+		m_Logger.warn("Handshake received again, ignoring");
 		return;
 	}
 
