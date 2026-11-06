@@ -24,6 +24,10 @@
 
 #include "GlobalVars.h"
 
+#if defined(ESP32) && defined(VENTI_BATTERY_SLEEP_VOLTAGE)
+#include <esp_sleep.h>
+#endif
+
 #if ESP8266 \
 	&& (BATTERY_MONITOR == BAT_INTERNAL || BATTERY_MONITOR == BAT_INTERNAL_MCP3021)
 ADC_MODE(ADC_VCC);
@@ -115,6 +119,32 @@ void BatteryMonitor::Loop() {
 				level = 0;
 			}
 			networkConnection.sendBatteryLevel(voltage, level);
+#if defined(ESP32) && defined(VENTI_BATTERY_SLEEP_VOLTAGE)
+			// Filter brief ADC/radio-induced voltage dips. Use actual measured voltage
+			// for SlimeVR reporting, and filtered voltage only for the cutoff decision.
+			if (filteredBatteryVoltage < 0) {
+				filteredBatteryVoltage = voltage;
+			} else {
+				filteredBatteryVoltage += VENTI_BATTERY_FILTER_ALPHA
+					* (voltage - filteredBatteryVoltage);
+			}
+			statusManager.setStatus(
+				SlimeVR::Status::LOW_BATTERY,
+				filteredBatteryVoltage < VENTI_BATTERY_WARNING_VOLTAGE
+			);
+			if (filteredBatteryVoltage < VENTI_BATTERY_SLEEP_VOLTAGE) {
+				if (!lowBatteryTimerActive) {
+					lowBatteryTimerActive = true;
+					lowBatterySinceMs = now_ms;
+				} else if (now_ms - lowBatterySinceMs >= VENTI_BATTERY_SLEEP_DELAY_MS) {
+					m_Logger.warn("Venti low battery: entering deep sleep");
+					// No automatic wake source: physical power cycling is required.
+					esp_deep_sleep_start();
+				}
+			} else {
+				lowBatteryTimerActive = false;
+			}
+#endif
 #ifdef BATTERY_LOW_POWER_VOLTAGE
 			if (voltage < BATTERY_LOW_POWER_VOLTAGE) {
 #if defined(BATTERY_LOW_VOLTAGE_DEEP_SLEEP) && BATTERY_LOW_VOLTAGE_DEEP_SLEEP
