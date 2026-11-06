@@ -672,6 +672,24 @@ void Connection::update() {
 		return;
 	}
 
+#ifdef ESP32
+	// Restore the v0.7.2 behavior: ESP32 UDP can stall when an unrelated
+	// datagram is larger than the receive buffer. Drain it before returning.
+	if (packetSize > sizeof(m_Packet)) {
+		while (packetSize > 0) {
+			int bytesRead = m_UDP.read(
+				m_Packet,
+				std::min(sizeof(m_Packet), static_cast<size_t>(packetSize))
+			);
+			if (bytesRead <= 0) {
+				break;
+			}
+			packetSize -= bytesRead;
+		}
+		return;
+	}
+#endif
+
 	int len = m_UDP.read(m_Packet, sizeof(m_Packet));
 
 #ifdef DEBUG_NETWORK
