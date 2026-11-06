@@ -686,8 +686,24 @@ void Connection::update() {
 	(void)packetSize;
 #endif
 
-	if (static_cast<ReceivePacketType>(m_Packet[3]) == ReceivePacketType::Handshake) {
-		m_Logger.warn("Handshake received again, ignoring");
+	// The server's discovery handshake uses byte 0, not the normal packet
+	// type at byte 3. Handle it before interpreting the normal packet header.
+	// A server may repeat its handshake when another tracker joins.
+	if (len >= 13 && static_cast<ReceivePacketType>(m_Packet[0])
+			== ReceivePacketType::Handshake
+		&& memcmp(m_Packet + 1, "Hey OVR =D 5", 12) == 0) {
+		if (m_UDP.remoteIP() == m_ServerHost) {
+			m_ServerPort = m_UDP.remotePort();
+			m_LastPacketTimestamp = millis();
+			m_Logger.info("Server handshake refreshed connection");
+		} else {
+			m_Logger.warn("Ignoring handshake from a different server");
+		}
+		return;
+	}
+
+	if (len < 4) {
+		m_Logger.warn("Ignoring short UDP packet");
 		return;
 	}
 
