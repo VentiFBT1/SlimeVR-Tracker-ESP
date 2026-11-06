@@ -85,4 +85,11 @@
 #define BATTERY_SHIELD_R1 150
 #define BATTERY_SHIELD_R2 150
 
+// Venti battery longevity safeguards (experimental ESP32-C3 build).
+// Thresholds must be verified against a multimeter on production hardware.
+#define VENTI_BATTERY_WARNING_VOLTAGE 3.50f
+#define VENTI_BATTERY_SLEEP_VOLTAGE 3.30f
+#define VENTI_BATTERY_SLEEP_DELAY_MS 30000UL
+#define VENTI_BATTERY_FILTER_ALPHA 0.20f
+
 // ------------------------------
