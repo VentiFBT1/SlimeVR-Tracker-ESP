@@ -87,6 +87,11 @@ private:
 	uint16_t voltage_3_3 = 3000;
 #endif
 	float voltage = -1;
+#if defined(ESP32) && defined(VENTI_BATTERY_SLEEP_VOLTAGE)
+	float filteredBatteryVoltage = -1;
+	unsigned long lowBatterySinceMs = 0;
+	bool lowBatteryTimerActive = false;
+#endif
 	float level = -1;
 
 	SlimeVR::Logging::Logger m_Logger = SlimeVR::Logging::Logger("BatteryMonitor");
