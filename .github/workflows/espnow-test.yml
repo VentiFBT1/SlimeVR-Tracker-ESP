@@ -3,7 +3,6 @@ name: Venti ESP-NOW test builds
 on:
   push:
     branches: [test/venti-espnow]
-  create:
   workflow_dispatch:
 
 permissions:
@@ -57,7 +56,7 @@ jobs:
           key: venti-espnow-pio-v1-receiver
       - run: python tools/espnow-receiver/prepare.py .receiver-build
       - name: Build receiver
-        run: pio run -d .receiver-build -c platformio-venti.ini
+        run: pio run -d .receiver-build -c .receiver-build/platformio-venti.ini
       - uses: actions/upload-artifact@v4
         with:
           name: receiver-venti-s3fn8

@@ -16,4 +16,4 @@ subprocess.run(["git", "-C", str(target), "apply", str(overlay / "upstream-fixes
 shutil.copy2(overlay / "platformio-venti.ini", target / "platformio-venti.ini")
 shutil.copy2(overlay / "boards/venti_s3fn8.json", target / "boards/venti_s3fn8.json")
 shutil.copytree(overlay / "variants/venti_s3fn8", target / "variants/venti_s3fn8")
-print(f"Prepared {target}; build with: pio run -d {target} -c platformio-venti.ini")
+print(f"Prepared {target}; build with: pio run -d {target} -c {target / 'platformio-venti.ini'}")

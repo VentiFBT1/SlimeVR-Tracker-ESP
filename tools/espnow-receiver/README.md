@@ -8,7 +8,7 @@ The upstream MIT/Apache notices and licenses apply to the ported source.
 
 ```
 python tools/espnow-receiver/prepare.py .receiver-build
-pio run -d .receiver-build -c platformio-venti.ini
+pio run -d .receiver-build -c .receiver-build/platformio-venti.ini
 ```
 
 Hardware: supplied ESP32-S3-Dongle v1.0g schematic, ESP32-S3FN8,
