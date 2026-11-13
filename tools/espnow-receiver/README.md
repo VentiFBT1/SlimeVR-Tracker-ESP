@@ -27,3 +27,17 @@ validates tracker data frame length before forwarding it. It also checks wire
 structure sizes at compile time.
 
 The vendor's wireless-SD test binary is not used.
+
+Receiver test4 defers received frames through a bounded, zero-wait FreeRTOS
+queue. Only the main loop processes messages, sends responses, updates tracker
+lists, writes saved pairings, and touches HID report FIFOs. This removes the
+Wi-Fi-callback/main-loop send-mutex cycle and concurrent vector/FIFO mutation.
+Disconnect-all and timeout cleanup do not reuse invalidated vector iterators.
+The `health` command reports queue drops and per-tracker motion PPS, last-motion
+age, and missed heartbeats. It does not enable streaming.
+
+CI runs the actual queue, callback, drain, and disconnect methods with ten
+simulated 100-Hz senders, checks copied callback buffers and zero-wait overload,
+and enables checked STL iterators. This is a software regression, not proof of
+ten-tracker RF/USB capacity. First validate sustained motion and repeated tracker
+power-cycle reconnection with one physical tracker; then increase tracker count.

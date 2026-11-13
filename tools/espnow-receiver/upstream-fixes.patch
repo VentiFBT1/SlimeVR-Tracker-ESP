@@ -1,3 +1,73 @@
+diff --git a/platformio.ini b/platformio.ini
+index 39a1687..1fb70c2 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -1,51 +1,20 @@
+-; PlatformIO Project Configuration File
+-;
+-;   Build options: build flags, source filter
+-;   Upload options: custom upload port, speed and extra flags
+-;   Library options: dependencies, extra library storages
+-;   Advanced options: extra scripting
+-;
+-; Please visit documentation for the other options and examples
+-; https://docs.platformio.org/page/projectconf.html
+-
+ [platformio]
+-build_cache_dir = C:\Users\Alexander\AppData\Local\Programs\Microsoft VS Code\.cache
+-default_envs = Proton_Dongle
++build_cache_dir = .cache
++default_envs = venti_s3fn8
+ 
+-[env]
++[env:venti_s3fn8]
++platform = espressif32 @ 6.7.0
++platform_packages =
++  framework-arduinoespressif32 @ https://github.com/espressif/arduino-esp32.git#3.0.1
++  framework-arduinoespressif32-libs @ https://github.com/espressif/arduino-esp32/releases/download/3.0.1/esp32-arduino-libs-3.0.1.zip
++framework = arduino
++board = venti_s3fn8
++board_build.variants_dir = variants
+ monitor_speed = 115200
+ monitor_echo = yes
+-monitor_filters = colorize
+-lib_deps = rlogiacco/CircularBuffer@^1.4.0
+-framework = arduino
+-extra_scripts = pre:scripts/firmware_version.py
+-build_flags = -std=gnu++2a
++lib_deps = rlogiacco/CircularBuffer@1.4.0
++build_flags =
++  -std=gnu++2a
++  -DFIRMWARE_VERSION='"venti-espnow-test1"'
+ build_unflags = -std=gnu++11 -std=gnu++17
+-; build_type = debug
+-; monitor_port = COM37
+-; upload_port = COM29
+ 
+-[env:Proton_Dongle]
+-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+-board = Proton_Dongle
+-board_build.variants_dir = variants
+-
+-[env:seeed_xiao_esp32s3]
+-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+-board = seeed_xiao_esp32s3
+-board_build.variants_dir = variants
+-
+-[env:slime_dongle_s3]
+-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+-board = slime-dongle-s3
+-board_build.variants_dir = variants
+-
+-[env:slime_dongle_s2]
+-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+-board = slime-dongle-s2
+-board_build.variants_dir = variants
+-
+-[env:supermini_esp32s3]
+-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+-board = supermini_esp32s3
+-board_build.variants_dir = variants
 diff --git a/src/Serial.h b/src/Serial.h
 index 452c673..3561bb1 100644
 --- a/src/Serial.h
@@ -244,13 +314,20 @@ index 452c673..3561bb1 100644
 -
  extern HybridSerial Serial;
 diff --git a/src/commands/SCInitCommand.cpp b/src/commands/SCInitCommand.cpp
-index 6808a59..2bb882e 100644
+index 6808a59..bc6bb2d 100644
 --- a/src/commands/SCInitCommand.cpp
 +++ b/src/commands/SCInitCommand.cpp
-@@ -3,10 +3,15 @@
+@@ -1,12 +1,22 @@
+ #include "SCInitCommand.h"
++#include "espnow/espnow.h"
+ #include "./serialCom/Ident.h"
  #include "./serialCom/SerialCom.h"
  
  bool handleSCInitCommand(const String &command) {
++    if (command.equalsIgnoreCase("health")) {
++        ESPNowCommunication::getInstance().printHealth();
++        return true;
++    }
 +    // One-shot status must not turn on a stream that outlives a console query.
 +    if (command.equalsIgnoreCase("status")) {
 +        SlimeVR::SerialComMessages::Ident::print();
@@ -324,19 +401,68 @@ index 5d9e78c..df5858f 100644
  
  size_t Configuration::getSavedTrackerCount() {
 diff --git a/src/espnow/espnow.cpp b/src/espnow/espnow.cpp
-index 3304298..878c10d 100644
+index 3304298..f2039a5 100644
 --- a/src/espnow/espnow.cpp
 +++ b/src/espnow/espnow.cpp
-@@ -309,7 +309,7 @@ void ESPNowCommunication::sendRateUpdateToAllTrackers() {
+@@ -150,16 +150,16 @@ bool ESPNowCommunication::disconnectSingleTracker(const uint8_t mac[6]) {
+ 
+ // Disconnect all trackers
+ void ESPNowCommunication::disconnectAllTrackers() {
+-    for (const auto &tracker : connectedTrackers) {
+-        disconnectSingleTracker(tracker.mac.data());
++    while (!connectedTrackers.empty()) {
++        // Copy the key before erasing; vector erase invalidates its elements.
++        const auto mac = connectedTrackers.back().mac;
++        disconnectSingleTracker(mac.data());
+     }
+-
+-    connectedTrackers.clear();
+     Serial.println("All trackers disconnected");
+ }
+ 
+ // Queue a message for sending with rate limiting
+-void ESPNowCommunication::queueMessageMutex(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat, bool ephemeral) {
++void ESPNowCommunication::enqueueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat, bool ephemeral) {
+     // Validate message data
+     // Serial.printf("Queueing message to " MACSTR " of size %zu\n", MAC2ARGS(peerMac), dataLen);
+     if (dataLen == 0 || dataLen > ESP_NOW_MAX_DATA_LEN) {
+@@ -189,7 +189,7 @@ void ESPNowCommunication::queueMessageMutex(const uint8_t peerMac[6], const uint
+ 
+ // Queue a message for sending with rate limiting
+ void ESPNowCommunication::queueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat, bool ephemeral) {
+-    queueMessageMutex(peerMac, data, dataLen, isHeartbeat, ephemeral);
++    enqueueMessage(peerMac, data, dataLen, isHeartbeat, ephemeral);
+     processSendQueue();
+ }
+ 
+@@ -204,7 +204,6 @@ void ESPNowCommunication::queueMessage(const uint8_t peerMac[6], const uint8_t *
+ 
+ // Process queued messages with rate limiting
+ void ESPNowCommunication::processSendQueue() {
+-    MutexLock lock(queueMutex);
+     if (queueHead == queueTail) return;
+ 
+     // Serial.printf("Queue in processSendQueue: head=%zu, tail=%zu\n", queueHead, queueTail);
+@@ -309,14 +308,10 @@ void ESPNowCommunication::sendRateUpdateToAllTrackers() {
  }
  
  // Initializes ESPNOW communication
 -ErrorCodes ESPNowCommunication::begin() {
+-    // Initialize mutex for queue protection
+-    if (!queueMutex) {
+-        queueMutex = xSemaphoreCreateMutex();
+-        if (!queueMutex) {
+-            Serial.println("[ESPNOW] Failed to create queue mutex!");
+-            return ErrorCodes::ESP_NOW_INIT_FAILED;
+-        }
 +ErrorCodes ESPNowCommunication::begin(bool allowInitialScan) {
-     // Initialize mutex for queue protection
-     if (!queueMutex) {
-         queueMutex = xSemaphoreCreateMutex();
-@@ -366,7 +366,7 @@ ErrorCodes ESPNowCommunication::begin() {
++    if (!receiveQueue.begin()) {
++        Serial.println("[ESPNOW] Failed to create receive queue!");
++        return ErrorCodes::ESP_NOW_INIT_FAILED;
+     }
+     channel = Configuration::getInstance().getWifiChannel();
+ 
+@@ -366,7 +361,7 @@ ErrorCodes ESPNowCommunication::begin() {
  
      if (Configuration::getInstance().wifiChannelFileExists()) {
          Serial.printf("[ESPNOW] Using saved WiFi channel: %d\n", channel);
@@ -345,7 +471,42 @@ index 3304298..878c10d 100644
          Serial.println("[ESPNOW] No saved WiFi channel found, scanning environment...");
          enterEnvironmentScanningMode();
      }
-@@ -382,6 +382,7 @@ void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const
+@@ -375,13 +370,39 @@ ErrorCodes ESPNowCommunication::begin() {
+ 
+ // ESPNOW receive callback
+ void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
+-    // Ignore received packets while in scanning mode
+-    if (ESPNowCommunication::getInstance().isScanningEnvironment()) return;
+-    ESPNowCommunication::getInstance().handleMessage(senderInfo, data, dataLen);
++    // This callback runs on the Wi-Fi task: copy only, no sends or locks.
++    ESPNowCommunication::getInstance().receiveQueue.push(senderInfo, data, dataLen);
++}
++
++// Main-loop owner of tracker state, filesystem operations, send queue and HID FIFO.
++void ESPNowCommunication::processReceivedMessages() {
++    ESPNowReceiveQueue::Frame frame;
++    // Bound each pass so serial, buttons and USB are serviced under heavy traffic.
++    for (size_t i = 0; i < ESPNowReceiveQueue::Capacity && receiveQueue.pop(frame); ++i) {
++        if (scanningEnvironment) continue;
++        wifi_pkt_rx_ctrl_t radio{};
++        radio.rssi = frame.rssi;
++        esp_now_recv_info_t info{};
++        info.src_addr = frame.mac;
++        info.rx_ctrl = &radio;
++        handleMessage(&info, frame.data, frame.length);
++    }
++}
++
++void ESPNowCommunication::printHealth() {
++    Serial.printf("[HEALTH] rx_dropped=%lu\n", static_cast<unsigned long>(receiveQueue.droppedFrames()));
++    for (const auto& tracker : connectedTrackers) {
++        Serial.printf("[MOTION] " MACSTR " pps=%u age_ms=%lu missed=%u\n",
++            MAC2ARGS(tracker.mac.data()), tracker.motionPacketsPerSecond,
++            static_cast<unsigned long>(tracker.lastMotionTime ? millis() - tracker.lastMotionTime : UINT32_MAX),
++            tracker.missedPings);
++    }
++    Serial.println("[HEALTH END]");
+ }
  
  // Handles incoming ESPNOW messages
  void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
@@ -353,7 +514,7 @@ index 3304298..878c10d 100644
      // Fast path: cast message once and read header
      //Serial.printf("[ESPNOW] Received message of length %d from " MACSTR "\n", dataLen, MAC2ARGS(senderInfo->src_addr));
      const ESPNowMessage *message = reinterpret_cast<const ESPNowMessage *>(data);
-@@ -389,6 +390,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -389,6 +410,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
  
      // Optimize the most common case - TRACKER_DATA (hot path)
      if (header == ESPNowMessageTypes::TRACKER_DATA) {
@@ -361,7 +522,50 @@ index 3304298..878c10d 100644
          // Fast validation: check if tracker is connected (most packets come from connected trackers)
          const uint8_t *mac = senderInfo->src_addr;
          Tracker* tracker = getTracker(mac);
-@@ -706,10 +708,10 @@ void ESPNowCommunication::scanningLoop() {
+@@ -403,6 +425,10 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+ 
+         tracker->bytesReceived += message->packet.len;
+         tracker->packetsReceived += 1;
++        if (message->packet.data[0] == 1 || message->packet.data[0] == 4) {
++            ++tracker->motionPacketsReceived;
++            tracker->lastMotionTime = millis();
++        }
+ 
+         // Forward packet to PacketHandling with RSSI
+         PacketHandling::getInstance().insert(message->packet.data, message->packet.len, senderInfo->rx_ctrl->rssi);
+@@ -412,6 +438,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+     // Handle less frequent message types
+     switch (header) {
+     case ESPNowMessageTypes::PAIRING_REQUEST: {
++        if (dataLen != sizeof(ESPNowPairingMessage)) return;
+         const ESPNowPairingMessage &request = message->pairing;
+         if (memcmp(request.securityBytes, securityCode, 8) != 0) return; // Invalid security code
+ 
+@@ -446,6 +473,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+     case ESPNowMessageTypes::PAIRING_RESPONSE:
+         return;
+     case ESPNowMessageTypes::HANDSHAKE_REQUEST: {
++        if (dataLen != sizeof(ESPNowConnectionMessage)) return;
+         const ESPNowConnectionMessage &handshake = message->connection;
+         // Validate security code
+         if (memcmp(handshake.securityBytes, securityCode, 8) != 0) {
+@@ -517,6 +545,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+         return;
+     }
+     case ESPNowMessageTypes::HEARTBEAT_ECHO: {
++        if (dataLen != sizeof(ESPNowHeartbeatEchoMessage)) return;
+         // Fast MAC lookup for connected tracker
+         const uint8_t *mac = senderInfo->src_addr;
+         Tracker *tracker = getTracker(mac);
+@@ -531,6 +560,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+         return;
+     }
+     case ESPNowMessageTypes::HEARTBEAT_RESPONSE: {
++        if (dataLen != sizeof(ESPNowHeartbeatResponseMessage)) return;
+         // Find the tracker and update heartbeat info
+         const uint8_t *mac = senderInfo->src_addr;
+         Tracker *tracker = getTracker(mac);
+@@ -706,10 +736,10 @@ void ESPNowCommunication::scanningLoop() {
              int primaryChannels[3] = {1, 6, 11};
              int bestPrimary = -1;
              uint32_t minPrimaryBytes = UINT32_MAX;
@@ -374,7 +578,7 @@ index 3304298..878c10d 100644
                      if (channelBytesSeen[ch] < minBytes) {
                          minBytes = channelBytesSeen[ch];
                          bestChannel = ch;
-@@ -748,7 +750,8 @@ void ESPNowCommunication::scanningLoop() {
+@@ -748,7 +778,8 @@ void ESPNowCommunication::scanningLoop() {
              }
  
              //Restart wifi
@@ -384,7 +588,42 @@ index 3304298..878c10d 100644
          } else {
              // Move to next channel
              WiFi.setChannel(WiFi.channel() + 1);
-@@ -1051,9 +1054,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
+@@ -762,6 +793,7 @@ void ESPNowCommunication::scanningLoop() {
+ 
+ // Main update loop to be called regularly
+ void ESPNowCommunication::update() {
++    processReceivedMessages();
+     const unsigned long currentTime = millis();
+     
+     // Throttle updates to reduce CPU usage - skip if called too frequently
+@@ -782,8 +814,10 @@ void ESPNowCommunication::update() {
+ 
+             uint32_t deltaTime = currentTime - tracker.lastDeltaTime;
+             tracker.lastDeltaTime = currentTime;
+-            tracker.bytesPerSecond = (tracker.bytesReceived * 1000) / deltaTime;
+-            tracker.packetsPerSecond = (tracker.packetsReceived * 1000) / deltaTime;
++            tracker.bytesPerSecond = deltaTime ? (tracker.bytesReceived * 1000UL) / deltaTime : 0;
++            tracker.packetsPerSecond = deltaTime ? (tracker.packetsReceived * 1000UL) / deltaTime : 0;
++            tracker.motionPacketsPerSecond = deltaTime ? (tracker.motionPacketsReceived * 1000UL) / deltaTime : 0;
++            tracker.motionPacketsReceived = 0;
+             tracker.bytesReceived = 0;
+             tracker.packetsReceived = 0;
+ 
+@@ -816,8 +850,11 @@ void ESPNowCommunication::update() {
+                 if (tracker.missedPings >= maxMissedPings)
+                 {
+                     //Serial.printf("Removing tracker " MACSTR " (ID: %d) due to missed heartbeats\n", MAC2ARGS(tracker.mac.data()), tracker.trackerId);
+-                    disconnectSingleTracker(tracker.mac.data());
+-                    continue; // Skip increment since we erased
++                    const size_t index = static_cast<size_t>(it - connectedTrackers.begin());
++                    const auto mac = tracker.mac;
++                    disconnectSingleTracker(mac.data());
++                    it = connectedTrackers.begin() + index;
++                    continue; // Continue with the next surviving element.
+                 }
+             }
+ 
+@@ -1051,9 +1088,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
          enteredPromiscuousMode = false;
          Serial.println("Exited promiscuous mode, stopping environment scanning");
      }
@@ -395,7 +634,7 @@ index 3304298..878c10d 100644
      if (SlimeVR::SerialCom::comEnabled()) {
          SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
      }
-@@ -1071,4 +1074,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
+@@ -1071,4 +1108,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
  
      // Blink LED twice to indicate reset action
      ledManager.pattern(500, 300, 2);
@@ -403,10 +642,28 @@ index 3304298..878c10d 100644
 \ No newline at end of file
 +}
 diff --git a/src/espnow/espnow.h b/src/espnow/espnow.h
-index 878a077..2e9396f 100644
+index 878a077..60e10e8 100644
 --- a/src/espnow/espnow.h
 +++ b/src/espnow/espnow.h
-@@ -36,7 +36,7 @@ class ESPNowCommunication {
+@@ -2,6 +2,7 @@
+ 
+ #include "error_codes.h"
+ #include "espnow/messages.h"
++#include "receiveQueue.h"
+ 
+ #include <WiFi.h>
+ #include <cstdint>
+@@ -24,6 +25,9 @@ class ESPNowCommunication {
+             uint16_t packetsReceived = 0; // Total packets received from this tracker
+             uint16_t bytesPerSecond = 0; // Calculated bytes per second
+             uint16_t packetsPerSecond = 0; // Calculated packets per second
++            uint16_t motionPacketsReceived = 0;
++            uint16_t motionPacketsPerSecond = 0;
++            uint32_t lastMotionTime = 0;
+             uint32_t lastDeltaTime = 0; // Time since pps and bps were last calculated, used for accurate rate calculations
+             uint32_t lastRegistrationTime = 0; // Timestamp of when the tracker was registered
+         };
+@@ -36,7 +40,7 @@ class ESPNowCommunication {
  
          static ESPNowCommunication &getInstance();
  
@@ -415,7 +672,15 @@ index 878a077..2e9396f 100644
  
          bool enterPairingMode();
          void exitPairingMode();
-@@ -76,7 +76,7 @@ class ESPNowCommunication {
+@@ -49,6 +53,7 @@ class ESPNowCommunication {
+         bool isTrackerIdConnected(uint8_t trackerId) const;
+ 
+         void update();
++        void printHealth();
+ 
+         void onTrackerConnected(std::function<void(Tracker)> callback);
+         void onTrackerDisconnected(std::function<void(Tracker)> callback);  // Passes tracker structure
+@@ -76,12 +81,14 @@ class ESPNowCommunication {
          static ESPNowCommunication instance;
          ESPNowCommunication() = default;
  
@@ -424,6 +689,38 @@ index 878a077..2e9396f 100644
  
          void invokeTrackerConnectedEvent(Tracker tracker);
          void invokeTrackerDisconnectedEvent(Tracker tracker);
+         void sendRateUpdateToAllTrackers();
+ 
++        ESPNowReceiveQueue receiveQueue;
++        void processReceivedMessages();
+         static void onReceive(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen);
+         void __attribute__((hot)) __attribute__((flatten)) handleMessage(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen);
+ 
+@@ -136,23 +143,12 @@ class ESPNowCommunication {
+         }
+         unsigned long lastSendTime = 0;
+         static constexpr unsigned long sendRateLimit = 5;
+-        void queueMessageMutex(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat, bool ephemeral);
++        void enqueueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat, bool ephemeral);
+         void queueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat, bool ephemeral);
+         void queueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat);
+         void queueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen);
+         void processSendQueue();
+ 
+-        // Mutex for protecting send queue (thread safety)
+-        SemaphoreHandle_t queueMutex = nullptr;
+-        // RAII helper for mutex locking
+-        class MutexLock {
+-        public:
+-            MutexLock(SemaphoreHandle_t mutex) : m(mutex) { if (m) xSemaphoreTake(m, portMAX_DELAY); }
+-            ~MutexLock() { if (m) xSemaphoreGive(m); }
+-        private:
+-            SemaphoreHandle_t m;
+-        };
+-
+         std::string espNowErrorToString(esp_err_t error);
+ 
+         uint8_t ota_auth[16];
 diff --git a/src/espnow/messages.h b/src/espnow/messages.h
 index d0dacd7..a6d742d 100644
 --- a/src/espnow/messages.h
@@ -492,3 +789,59 @@ index 00f1d0f..96894b2 100644
 -}
 \ No newline at end of file
 +}
+diff --git a/src/espnow/receiveQueue.h b/src/espnow/receiveQueue.h
+new file mode 100644
+--- /dev/null
++++ b/src/espnow/receiveQueue.h
+@@ -0,0 +1,51 @@
++#pragma once
++
++#include <esp_now.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/queue.h>
++#include <atomic>
++#include <cstdint>
++#include <cstring>
++
++// The Wi-Fi task only copies into this bounded queue. Radio replies, flash,
++// tracker lists, and USB report buffers belong exclusively to the main loop.
++class ESPNowReceiveQueue {
++public:
++    struct Frame {
++        uint8_t mac[6];
++        int8_t rssi;
++        uint8_t length;
++        uint8_t data[ESP_NOW_MAX_DATA_LEN];
++    };
++    static constexpr size_t Capacity = 32;
++
++    bool begin() {
++        if (!queue) queue = xQueueCreateStatic(Capacity, sizeof(Frame), storage, &control);
++        return queue != nullptr;
++    }
++    bool push(const esp_now_recv_info_t* info, const uint8_t* data, int length) {
++        if (!queue || !info || !info->src_addr || !info->rx_ctrl || !data ||
++            length < 1 || length > ESP_NOW_MAX_DATA_LEN) return false;
++        Frame frame{};
++        memcpy(frame.mac, info->src_addr, sizeof(frame.mac));
++        frame.rssi = info->rx_ctrl->rssi;
++        frame.length = static_cast<uint8_t>(length);
++        memcpy(frame.data, data, length);
++        // A full queue drops a frame; it must never block the Wi-Fi task.
++        if (xQueueSend(queue, &frame, 0) != pdTRUE) {
++            dropped.fetch_add(1, std::memory_order_relaxed);
++            return false;
++        }
++        return true;
++    }
++    bool pop(Frame& frame) {
++        return queue && xQueueReceive(queue, &frame, 0) == pdTRUE;
++    }
++    uint32_t droppedFrames() const { return dropped.load(std::memory_order_relaxed); }
++
++private:
++    StaticQueue_t control{};
++    uint8_t storage[Capacity * sizeof(Frame)]{};
++    QueueHandle_t queue = nullptr;
++    std::atomic<uint32_t> dropped{0};
++};

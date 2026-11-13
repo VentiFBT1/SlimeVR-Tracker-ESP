@@ -63,6 +63,8 @@ jobs:
         run: python tools/espnow-receiver/test_channel_config.py .receiver-build
       - name: Test USB serial backpressure and reconnect
         run: python tools/espnow-receiver/test_serial_backpressure.py .receiver-build
+      - name: Test deferred radio callbacks and ten-tracker scheduling
+        run: python tools/espnow-receiver/test_receive_queue.py .receiver-build
       - name: Build receiver
         run: pio run -d .receiver-build -e venti_s3fn8
       - name: Validate and merge receiver image
