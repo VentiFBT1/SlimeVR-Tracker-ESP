@@ -1,14 +1,270 @@
 diff --git a/src/Serial.h b/src/Serial.h
-index 452c673..ed3a19d 100644
+index 452c673..3561bb1 100644
 --- a/src/Serial.h
 +++ b/src/Serial.h
-@@ -1,4 +1,6 @@
+@@ -1,156 +1,107 @@
++#pragma once
  #include <Arduino.h>
 +#include <USB.h>
 +#include <USBCDC.h>
  #include <freertos/FreeRTOS.h>
  #include <freertos/semphr.h>
++#include <algorithm>
++#include <cstdarg>
++#include <cstdio>
++#include <cstring>
  
+-#undef Serial  // Remove the core's Serial definition
+-
+-
+-#ifndef SERIAL_H
+-#define SERIAL_H
+-
++#undef Serial
+ extern USBCDC USBSerial;
+ 
++// Diagnostics must never stop radio/USB servicing when a host closes its port.
++// All USB writes are bounded by the currently available TinyUSB FIFO space.
+ class HybridSerial : public Stream {
+-private:
+-    HardwareSerial* uart;
+-    USBCDC* usb;
+-    SemaphoreHandle_t writeMutex;
++    HardwareSerial* uart = &Serial0;
++    USBCDC* usb = &USBSerial;
+     StaticSemaphore_t mutexBuffer;
+-    
+-    // Internal unlocked write helpers
+-    size_t writeUnlocked(uint8_t c) {
+-        size_t n = 0;
+-        n += uart->write(c);
+-        if (usb && usb->availableForWrite() > 0) {
+-            n += usb->write(c);
++    SemaphoreHandle_t writeMutex;
++    static constexpr size_t Capacity = 4096;
++    uint8_t pending[Capacity]{};
++    size_t head = 0, count = 0;
++
++    bool lock() { return writeMutex && xSemaphoreTake(writeMutex, 0) == pdTRUE; }
++    void unlock() { xSemaphoreGive(writeMutex); }
++    void pumpUnlocked() {
++        if (!usb || !static_cast<bool>(*usb)) {
++            head = count = 0; // Never replay a previous serial session's reply.
++            return;
+         }
+-        return n;
+-    }
+-    
+-    size_t writeUnlocked(const uint8_t *buffer, size_t size) {
+-        size_t n = 0;
+-        n += uart->write(buffer, size);
+-        if (usb && usb->availableForWrite() > 0) {
+-            n += usb->write(buffer, size);
++        int available = usb->availableForWrite();
++        if (available <= 0 || count == 0) return;
++        size_t length = std::min(count, static_cast<size_t>(available));
++        length = std::min(length, Capacity - head);
++        length = std::min(length, size_t{64});
++        // Arduino 3.0.1 USBCDC::write can spin if length exceeds FIFO space.
++        size_t sent = std::min(length, usb->write(pending + head, length));
++        head = (head + sent) % Capacity;
++        count -= sent;
++    }
++    bool enqueueUnlocked(const uint8_t* data, size_t size, bool newline) {
++        if (!usb || !static_cast<bool>(*usb)) return false;
++        size_t required = size + (newline ? 2 : 0);
++        if (required > Capacity - count) return false;
++        for (size_t i = 0; i < size; ++i) pending[(head + count++) % Capacity] = data[i];
++        if (newline) {
++            pending[(head + count++) % Capacity] = '\r';
++            pending[(head + count++) % Capacity] = '\n';
++        }
++        return true;
++    }
++    size_t writeFrame(const uint8_t* data, size_t size, bool newline) {
++        if ((!data && size) || !lock()) return 0;
++        pumpUnlocked();
++        size_t total = size + (newline ? 2 : 0);
++        bool accepted = enqueueUnlocked(data, size, newline);
++        // UART is best-effort too; it must not hold the USB/radio task waiting.
++        if (uart->availableForWrite() >= static_cast<int>(total)) {
++            uart->write(data, size);
++            if (newline) uart->write(reinterpret_cast<const uint8_t*>("\r\n"), 2);
++            accepted = true;
+         }
+-        return n;
++        pumpUnlocked();
++        unlock();
++        return accepted ? total : 0;
+     }
+-    
++
+ public:
+-    HybridSerial() : uart(&Serial0), usb(&USBSerial) {
+-        writeMutex = xSemaphoreCreateMutexStatic(&mutexBuffer);
+-    }
+-    
++    HybridSerial() : writeMutex(xSemaphoreCreateMutexStatic(&mutexBuffer)) {}
+     void begin(unsigned long baud = 115200) {
+         uart->begin(baud);
++        usb->setTxTimeoutMs(5);
+         usb->begin();
+     }
+-    
+-    void beginUSB() {
+-        usb->begin();
+-    }
+-    
+-    size_t write(uint8_t c) override {
+-        if (writeMutex && xSemaphoreTake(writeMutex, portMAX_DELAY) == pdTRUE) {
+-            size_t n = writeUnlocked(c);
+-            xSemaphoreGive(writeMutex);
+-            return n;
+-        }
+-        return 0;
++    void beginUSB() { usb->setTxTimeoutMs(5); usb->begin(); }
++    void tick() {
++        if (!lock()) return;
++        pumpUnlocked();
++        unlock();
+     }
+-
+-    size_t write(const uint8_t *buffer, size_t size) override {
+-        if (writeMutex && xSemaphoreTake(writeMutex, portMAX_DELAY) == pdTRUE) {
+-            size_t n = writeUnlocked(buffer, size);
+-            xSemaphoreGive(writeMutex);
+-            return n;
+-        }
+-        return 0;
+-    }
+-    
+-    size_t printf(const char *format, ...) {
+-        if (!writeMutex || xSemaphoreTake(writeMutex, portMAX_DELAY) != pdTRUE) {
+-            return 0;
+-        }
+-        
++    size_t write(uint8_t value) override { return writeFrame(&value, 1, false); }
++    size_t write(const uint8_t* data, size_t size) override { return writeFrame(data, size, false); }
++    size_t printf(const char* format, ...) {
++        char buffer[256];
+         va_list args;
+         va_start(args, format);
+-        char buffer[256];
+-        int len = vsnprintf(buffer, sizeof(buffer), format, args);
++        int length = vsnprintf(buffer, sizeof(buffer), format, args);
+         va_end(args);
+-        
+-        size_t n = 0;
+-        if (len > 0) {
+-            n = writeUnlocked((const uint8_t*)buffer, len);
+-        }
+-        
+-        xSemaphoreGive(writeMutex);
+-        return n;
+-    }
+-
+-    size_t writeLine(const uint8_t *buffer, size_t size) {
+-        if (writeMutex && xSemaphoreTake(writeMutex, portMAX_DELAY) == pdTRUE) {
+-            size_t n = writeUnlocked(buffer, size);
+-            n += writeUnlocked((const uint8_t*)"\r\n", 2);
+-            uart->flush();
+-            if (usb) usb->flush();
+-            xSemaphoreGive(writeMutex);
+-            return n;
+-        }
+-        return 0;
+-    }
+-
+-    size_t writeLine(const char* s) {
+-        return writeLine((const uint8_t*)s, strlen(s));
+-    }
+-    
+-    size_t println() {
+-        return writeLine((const uint8_t*)"", 0);
+-    }
+-    
+-    size_t println(const char* s) {
+-        return writeLine(s);
+-    }
+-    
+-    size_t println(const String& s) {
+-        return println(s.c_str());
+-    }
+-    
+-    // Read from both (USB has priority, then UART)
+-    int available() override {
+-        int n = usb->available();
+-        if (n > 0) return n;
+-        return uart->available();
+-    }
+-    
+-    int read() override {
+-        if (usb->available()) {
+-            return usb->read();
+-        }
+-        return uart->read();
+-    }
+-    
+-    int peek() override {
+-        if (usb->available()) {
+-            return usb->peek();
+-        }
+-        return uart->peek();
+-    }
+-    
+-    void flush() override {
+-        if (writeMutex && xSemaphoreTake(writeMutex, portMAX_DELAY) == pdTRUE) {
+-            uart->flush();
+-            if (usb) usb->flush();
+-            xSemaphoreGive(writeMutex);
+-        }
+-    }
+-    
+-    // Expose operator bool for connection checking
+-    operator bool() const {
+-        return *usb || *uart;
+-    }
++        if (length <= 0) return 0;
++        size_t bounded = std::min(static_cast<size_t>(length), sizeof(buffer) - 1);
++        return write(reinterpret_cast<const uint8_t*>(buffer), bounded);
++    }
++    size_t writeLine(const uint8_t* data, size_t size) { return writeFrame(data, size, true); }
++    size_t writeLine(const char* text) { return writeLine(reinterpret_cast<const uint8_t*>(text), strlen(text)); }
++    size_t println() { return writeLine(reinterpret_cast<const uint8_t*>(""), 0); }
++    size_t println(const char* text) { return writeLine(text); }
++    size_t println(const String& text) { return println(text.c_str()); }
++    int available() override { int n = usb->available(); return n > 0 ? n : uart->available(); }
++    int read() override { return usb->available() ? usb->read() : uart->read(); }
++    int peek() override { return usb->available() ? usb->peek() : uart->peek(); }
++    void flush() override { tick(); } // Service once; never wait for an unread host.
++    explicit operator bool() const { return static_cast<bool>(*usb) || static_cast<bool>(*uart); }
+ };
+ 
+-#endif
+-
+ extern HybridSerial Serial;
+diff --git a/src/commands/SCInitCommand.cpp b/src/commands/SCInitCommand.cpp
+index 6808a59..2bb882e 100644
+--- a/src/commands/SCInitCommand.cpp
++++ b/src/commands/SCInitCommand.cpp
+@@ -3,10 +3,15 @@
+ #include "./serialCom/SerialCom.h"
+ 
+ bool handleSCInitCommand(const String &command) {
++    // One-shot status must not turn on a stream that outlives a console query.
++    if (command.equalsIgnoreCase("status")) {
++        SlimeVR::SerialComMessages::Ident::print();
++        return true;
++    }
+     if (!command.equalsIgnoreCase("SCInit")) {
+         return false;
+     }
+     SlimeVR::SerialComMessages::Ident::print();
+     SlimeVR::SerialCom::getInstance().enabled = true; // Enable SerialCom after sending ident message
+     return true;
+-}
+\ No newline at end of file
++}
 diff --git a/src/configuration.cpp b/src/configuration.cpp
 index 5d9e78c..df5858f 100644
 --- a/src/configuration.cpp
@@ -185,6 +441,25 @@ index d0dacd7..a6d742d 100644
 +static_assert(sizeof(ESPNowConnectionAckMessage) == 17);
 +static_assert(sizeof(ESPNowHeartbeatEchoMessage) == 3);
 +static_assert(sizeof(ESPNowTrackerRateMessage) == 5);
+diff --git a/src/main.cpp b/src/main.cpp
+index c5fe518..8bc28ca 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -99,12 +99,14 @@ void setup() {
+ }
+ 
+ void loop() {
++    Serial.tick();
+     button.update();
+     ledManager.update();
+     espnow.update();
+ 
+     // Non-blocking serial command handler
+     consoleCommandHandler.update();
++    Serial.tick();
+ 
+     PacketHandling::getInstance().tick(hidDevice);
+ }
 diff --git a/src/packetHandling.cpp b/src/packetHandling.cpp
 index 1fb5910..5cb80bf 100644
 --- a/src/packetHandling.cpp
