@@ -41,8 +41,8 @@ namespace SlimeVR {
 #if !ESP8266
 		esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11N);
 		//esp_wifi_set_max_tx_power(WIFI_POWER_2dBm);
-		auto result = WiFi.setChannel(1);
-		if (!result) {
+		auto result = esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+		if (result != ESP_OK) {
 			Serial.println("[ESPNow] Failed to set WiFi channel for init: " + String(result));
 			return;
 		}
@@ -336,7 +336,7 @@ namespace SlimeVR {
 		MissedHeartbeats = 0;
 
 #if !ESP8266
-		WiFi.setChannel(ackMessage.channel);
+		esp_wifi_set_channel(ackMessage.channel, WIFI_SECOND_CHAN_NONE);
 #else
 		wifi_set_channel(ackMessage.channel);
 #endif
@@ -810,8 +810,8 @@ namespace SlimeVR {
 			channelIndex = 0;
 		}
 #ifndef ESP8266
-		auto result = WiFi.setChannel(channels[channelIndex]);
-		if (!result) {
+		auto result = esp_wifi_set_channel(channels[channelIndex], WIFI_SECOND_CHAN_NONE);
+		if (result != ESP_OK) {
 			Serial.println("[ESPNow] Failed to set WiFi channel: " + String(result));
 			return;
 		}
@@ -844,8 +844,8 @@ namespace SlimeVR {
 			}
 		}
 #ifndef ESP8266
-		auto result = WiFi.setChannel(target);
-		if (!result) {
+		auto result = esp_wifi_set_channel(target, WIFI_SECOND_CHAN_NONE);
+		if (result != ESP_OK) {
 			Serial.printf("[ESPNow] Failed to set WiFi channel %d: %d\n", target, result);
 			return;
 		}
@@ -865,8 +865,8 @@ namespace SlimeVR {
 
 	void ESPNow::setChannel (uint8_t channel) {
 #ifndef ESP8266
-		auto result = WiFi.setChannel(channel);
-		if (!result) {
+		auto result = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+		if (result != ESP_OK) {
 			Serial.printf("[ESPNow] Failed to set WiFi channel %d: %d\n", channel, result);
 			return;
 		}

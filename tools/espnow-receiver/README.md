@@ -16,8 +16,12 @@ Hardware: supplied ESP32-S3-Dongle v1.0g schematic, ESP32-S3FN8,
 USB uses the S3 native OTG port, HID VID 0x1209/PID 0x7690.
 Arduino 3.0.1 and PlatformIO's espressif32 6.7.0 are pinned to match the tracker.
 
-The small upstream patch fixes include handling WiFi.setChannel() as a boolean
-(so a successful channel scan can save its result and finish), filename casing for Linux, explicitly
+The small upstream patch uses the ESP32 esp_wifi_set_channel() API with its
+ESP_OK (zero) success result; Arduino 3.0.1's WiFi.setChannel also returns an
+integer error code, not bool. It checks channel storage writes and prevents
+an unsuccessful save from automatically restarting environment scans.
+The CI host regression executes the real channel-save method against successful
+and failed radio/storage cases. Other fixes include filename casing for Linux, explicitly
 includes USB CDC declarations, initializes the radio rate configuration, and
 validates tracker data frame length before forwarding it. It also checks wire
 structure sizes at compile time.

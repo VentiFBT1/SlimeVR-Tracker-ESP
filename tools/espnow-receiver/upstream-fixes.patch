@@ -10,21 +10,85 @@ index 452c673..ed3a19d 100644
  #include <freertos/semphr.h>
  
 diff --git a/src/configuration.cpp b/src/configuration.cpp
+index 5d9e78c..df5858f 100644
 --- a/src/configuration.cpp
 +++ b/src/configuration.cpp
-@@ -41,7 +41,7 @@
+@@ -2,6 +2,7 @@
+ #include <Arduino.h>
+ #include <algorithm>
+ #include <WiFi.h>
++#include <esp_wifi.h>
+ #include "espnow/espnow.h"
+ #include "./serialCom/SerialCom.h"
+ 
+@@ -40,15 +41,19 @@ void Configuration::forEachPairedTracker(std::function<void(const uint8_t mac[6]
+ }
  
  void Configuration::setWifiChannel(uint8_t channel) {
-     auto result = WiFi.setChannel(channel);
+-    auto result = WiFi.setChannel(channel);
 -    if (result != 0) {
-+    if (!result) {
++    auto result = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
++    if (result != ESP_OK) {
          Serial.printf("[Config] Failed to set WiFi channel to %d - error %d\n", channel, result);
          return;
      }
++    ESPNowCommunication::channel = channel;
+     auto file = LittleFS.open(wifiChannelPath, "w", true);
+-    file.write(&channel, 1);
++    if (!file || file.write(&channel, 1) != 1) {
++        file.close();
++        Serial.println("[Config] Channel is active but could not be saved to LittleFS");
++        return;
++    }
+     file.close();
+-    ESPNowCommunication::channel = channel;
+     Serial.printf("[Config] WiFi channel set to %d and saved to %s\n", channel, wifiChannelPath);
+     ESPNowCommunication::getInstance().disconnectAllTrackers();
+     if (SlimeVR::SerialCom::comEnabled()) {
+@@ -62,13 +67,19 @@ uint8_t Configuration::getWifiChannel() {
+     }
+     auto file = LittleFS.open(wifiChannelPath, "r");
+     uint8_t channel = DEFAULT_WIFI_CHANNEL;
+-    file.read(&channel, 1);
++    if (!file || file.read(&channel, 1) != 1 || channel < 1 || channel > 11) {
++        channel = DEFAULT_WIFI_CHANNEL;
++    }
+     file.close();
+     return channel;
+ }
+ 
+ bool Configuration::wifiChannelFileExists() {
+-    return LittleFS.exists(Configuration::wifiChannelPath);
++    auto file = LittleFS.open(wifiChannelPath, "r");
++    uint8_t saved = 0;
++    bool valid = file && file.read(&saved, 1) == 1 && saved >= 1 && saved <= 11;
++    file.close();
++    return valid;
+ }
+ 
+ size_t Configuration::getSavedTrackerCount() {
 diff --git a/src/espnow/espnow.cpp b/src/espnow/espnow.cpp
-index 3304298..a1b668f 100644
+index 3304298..878c10d 100644
 --- a/src/espnow/espnow.cpp
 +++ b/src/espnow/espnow.cpp
+@@ -309,7 +309,7 @@ void ESPNowCommunication::sendRateUpdateToAllTrackers() {
+ }
+ 
+ // Initializes ESPNOW communication
+-ErrorCodes ESPNowCommunication::begin() {
++ErrorCodes ESPNowCommunication::begin(bool allowInitialScan) {
+     // Initialize mutex for queue protection
+     if (!queueMutex) {
+         queueMutex = xSemaphoreCreateMutex();
+@@ -366,7 +366,7 @@ ErrorCodes ESPNowCommunication::begin() {
+ 
+     if (Configuration::getInstance().wifiChannelFileExists()) {
+         Serial.printf("[ESPNOW] Using saved WiFi channel: %d\n", channel);
+-    } else {
++    } else if (allowInitialScan) {
+         Serial.println("[ESPNOW] No saved WiFi channel found, scanning environment...");
+         enterEnvironmentScanningMode();
+     }
 @@ -382,6 +382,7 @@ void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const
  
  // Handles incoming ESPNOW messages
@@ -41,7 +105,41 @@ index 3304298..a1b668f 100644
          // Fast validation: check if tracker is connected (most packets come from connected trackers)
          const uint8_t *mac = senderInfo->src_addr;
          Tracker* tracker = getTracker(mac);
-@@ -1071,4 +1073,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
+@@ -706,10 +708,10 @@ void ESPNowCommunication::scanningLoop() {
+             int primaryChannels[3] = {1, 6, 11};
+             int bestPrimary = -1;
+             uint32_t minPrimaryBytes = UINT32_MAX;
+-            if (!SlimeVR::SerialCom::comEnabled()) {
++            {
+                 for (int ch = 1; ch <= 11; ++ch) {
+                     size_t uniqueAPs = channelBSSIDs[ch].size();
+-                    Serial.printf("Channel %2d: %10u score, %u unique APs\n", ch, channelBytesSeen[ch], uniqueAPs);
++                    if (!SlimeVR::SerialCom::comEnabled()) Serial.printf("Channel %2d: %10u score, %u unique APs\n", ch, channelBytesSeen[ch], uniqueAPs);
+                     if (channelBytesSeen[ch] < minBytes) {
+                         minBytes = channelBytesSeen[ch];
+                         bestChannel = ch;
+@@ -748,7 +750,8 @@ void ESPNowCommunication::scanningLoop() {
+             }
+ 
+             //Restart wifi
+-            begin();
++            // A missing/unwritable settings file must not start another scan.
++            begin(false);
+         } else {
+             // Move to next channel
+             WiFi.setChannel(WiFi.channel() + 1);
+@@ -1051,9 +1054,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
+         enteredPromiscuousMode = false;
+         Serial.println("Exited promiscuous mode, stopping environment scanning");
+     }
+-    begin();
+     scanningEnvironment = false;
+     statusManager.setStatus(SlimeVR::Status::SCANNING, false);
++    begin(false);
+     if (SlimeVR::SerialCom::comEnabled()) {
+         SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
+     }
+@@ -1071,4 +1074,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
  
      // Blink LED twice to indicate reset action
      ledManager.pattern(500, 300, 2);
@@ -49,9 +147,18 @@ index 3304298..a1b668f 100644
 \ No newline at end of file
 +}
 diff --git a/src/espnow/espnow.h b/src/espnow/espnow.h
-index 878a077..62ff3ad 100644
+index 878a077..2e9396f 100644
 --- a/src/espnow/espnow.h
 +++ b/src/espnow/espnow.h
+@@ -36,7 +36,7 @@ class ESPNowCommunication {
+ 
+         static ESPNowCommunication &getInstance();
+ 
+-        ErrorCodes begin();
++        ErrorCodes begin(bool allowInitialScan = true);
+ 
+         bool enterPairingMode();
+         void exitPairingMode();
 @@ -76,7 +76,7 @@ class ESPNowCommunication {
          static ESPNowCommunication instance;
          ESPNowCommunication() = default;

@@ -34,7 +34,7 @@ jobs:
           key: venti-espnow-pio-v1-${{ matrix.environment }}
       - name: Build tracker
         env:
-          FIRMWARE_VERSION: 0.7.4-espnow-test1
+          FIRMWARE_VERSION: 0.7.4-espnow-test2
         run: pio run -e ${{ matrix.environment }}
       - uses: actions/upload-artifact@v4
         with:
@@ -59,6 +59,8 @@ jobs:
           path: ~/.platformio
           key: venti-espnow-pio-v1-receiver
       - run: python tools/espnow-receiver/prepare.py .receiver-build
+      - name: Test channel selection with ESP_OK and failure results
+        run: python tools/espnow-receiver/test_channel_config.py .receiver-build
       - name: Build receiver
         run: pio run -d .receiver-build -e venti_s3fn8
       - name: Validate and merge receiver image
