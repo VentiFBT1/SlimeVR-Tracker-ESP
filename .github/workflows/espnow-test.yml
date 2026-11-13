@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: venti-espnow-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tracker:
     if: github.ref == 'refs/heads/test/venti-espnow'
@@ -56,7 +60,9 @@ jobs:
           key: venti-espnow-pio-v1-receiver
       - run: python tools/espnow-receiver/prepare.py .receiver-build
       - name: Build receiver
-        run: pio run -d .receiver-build -c .receiver-build/platformio-venti.ini
+        run: pio run -d .receiver-build -e venti_s3fn8
+      - name: Validate and merge receiver image
+        run: python scripts/package_espnow_receiver.py .receiver-build/.pio/build/venti_s3fn8
       - uses: actions/upload-artifact@v4
         with:
           name: receiver-venti-s3fn8
@@ -65,3 +71,5 @@ jobs:
             .receiver-build/.pio/build/venti_s3fn8/firmware.elf
             .receiver-build/.pio/build/venti_s3fn8/bootloader.bin
             .receiver-build/.pio/build/venti_s3fn8/partitions.bin
+            .receiver-build/.pio/build/venti_s3fn8/receiver-full-at-0x0.bin
+            .receiver-build/.pio/build/venti_s3fn8/SHA256SUMS.txt

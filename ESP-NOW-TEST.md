@@ -19,8 +19,9 @@ namespace, leaving the existing DeviceConfig and calibration file formats intact
 1. Confirm the exact SlimeVR Server beta version and the flash sizes reported by
    esptool for both devices. Back up each device's current flash before writing.
 2. Flash the receiver image to the ESP32-S3 dongle, and the ESP-NOW tracker image
-   to just one ESP32-C3 tracker. Use the build's bootloader/partition addresses;
-   `firmware.bin` is an application image, not a merged image for address zero.
+   to just one ESP32-C3 tracker. The receiver's `receiver-full-at-0x0.bin`
+   is a merged image for address zero. The tracker's `firmware.bin` is an
+   application image for 0x10000, not a merged image for address zero.
    Do not erase the tracker filesystem as part of an ordinary application update.
 3. Open receiver serial at 115200 baud. Wait for its initial channel scan to end.
    Press its GPIO0 button once, or send `pair` followed by Enter.
