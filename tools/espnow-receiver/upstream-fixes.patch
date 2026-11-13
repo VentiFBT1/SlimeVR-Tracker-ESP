@@ -9,6 +9,18 @@ index 452c673..ed3a19d 100644
  #include <freertos/FreeRTOS.h>
  #include <freertos/semphr.h>
  
+diff --git a/src/configuration.cpp b/src/configuration.cpp
+--- a/src/configuration.cpp
++++ b/src/configuration.cpp
+@@ -41,7 +41,7 @@
+ 
+ void Configuration::setWifiChannel(uint8_t channel) {
+     auto result = WiFi.setChannel(channel);
+-    if (result != 0) {
++    if (!result) {
+         Serial.printf("[Config] Failed to set WiFi channel to %d - error %d\n", channel, result);
+         return;
+     }
 diff --git a/src/espnow/espnow.cpp b/src/espnow/espnow.cpp
 index 3304298..a1b668f 100644
 --- a/src/espnow/espnow.cpp
