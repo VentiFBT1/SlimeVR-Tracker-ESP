@@ -103,6 +103,9 @@ void LEDManager::update() {
 				length = IMU_ERROR_INTERVAL;
 				break;
 		}
+	} else if (statusManager.hasStatus(Status::PAIRING_MODE)) {
+		count = 1;
+		length = 100;
 	} else if (statusManager.hasStatus(Status::WIFI_CONNECTING)) {
 		count = WIFI_CONNECTING_COUNT;
 		switch (m_CurrentStage) {

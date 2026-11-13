@@ -7,7 +7,9 @@ enum Status {
 	LOW_BATTERY = 1 << 1,
 	IMU_ERROR = 1 << 2,
 	WIFI_CONNECTING = 1 << 3,
-	SERVER_CONNECTING = 1 << 4
+	SERVER_CONNECTING = 1 << 4,
+	PAIRING_MODE = 1 << 5,
+	UPDATING = 1 << 6
 };
 
 const char* statusToString(Status status);

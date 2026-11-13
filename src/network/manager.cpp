@@ -26,14 +26,28 @@
 
 namespace SlimeVR::Network {
 
-void Manager::setup() { wifiNetwork.setUp(); }
+void Manager::setup() {
+#if USE_ESPNOW
+	espNow.setUp();
+#else
+	wifiNetwork.setUp();
+#endif
+}
 
 void Manager::update() {
+#if USE_ESPNOW
+	espNow.upkeep();
+#else
 	wifiNetwork.upkeep();
+#endif
 
 	auto wasConnected = m_IsConnected;
 
+#if USE_ESPNOW
+	m_IsConnected = espNow.isConnected();
+#else
 	m_IsConnected = wifiNetwork.isConnected();
+#endif
 
 	if (!m_IsConnected) {
 		return;

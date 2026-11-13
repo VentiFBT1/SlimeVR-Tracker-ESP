@@ -1,0 +1,68 @@
+name: Venti ESP-NOW test builds
+
+on:
+  push:
+    branches: [test/venti-espnow]
+  create:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tracker:
+    if: github.ref == 'refs/heads/test/venti-espnow'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [esp32c3, esp32c3_espnow]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install platformio==6.1.18
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: venti-espnow-pio-v1-${{ matrix.environment }}
+      - name: Build tracker
+        env:
+          FIRMWARE_VERSION: 0.7.4-espnow-test1
+        run: pio run -e ${{ matrix.environment }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tracker-${{ matrix.environment }}
+          path: |
+            .pio/build/${{ matrix.environment }}/firmware.bin
+            .pio/build/${{ matrix.environment }}/firmware.elf
+            .pio/build/${{ matrix.environment }}/bootloader.bin
+            .pio/build/${{ matrix.environment }}/partitions.bin
+
+  receiver:
+    if: github.ref == 'refs/heads/test/venti-espnow'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install platformio==6.1.18
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: venti-espnow-pio-v1-receiver
+      - run: python tools/espnow-receiver/prepare.py .receiver-build
+      - name: Build receiver
+        run: pio run -d .receiver-build -c platformio-venti.ini
+      - uses: actions/upload-artifact@v4
+        with:
+          name: receiver-venti-s3fn8
+          path: |
+            .receiver-build/.pio/build/venti_s3fn8/firmware.bin
+            .receiver-build/.pio/build/venti_s3fn8/firmware.elf
+            .receiver-build/.pio/build/venti_s3fn8/bootloader.bin
+            .receiver-build/.pio/build/venti_s3fn8/partitions.bin

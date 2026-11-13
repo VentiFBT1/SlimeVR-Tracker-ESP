@@ -1,0 +1,36 @@
+{
+  "build": {
+    "arduino": {
+      "ldscript": "esp32s3_out.ld",
+      "partitions": "default_8MB.csv",
+      "memory_type": "dio_qspi"
+    },
+    "core": "esp32",
+    "extra_flags": [
+      "-DARDUINO_VENTI_S3FN8",
+      "-DARDUINO_USB_MODE=0",
+      "-DARDUINO_USB_CDC_ON_BOOT=0",
+      "-DARDUINO_RUNNING_CORE=1",
+      "-DARDUINO_EVENT_RUNNING_CORE=1"
+    ],
+    "f_cpu": "240000000L",
+    "f_flash": "80000000L",
+    "flash_mode": "dio",
+    "hwids": [["0x1209", "0x7690"]],
+    "mcu": "esp32s3",
+    "variant": "venti_s3fn8"
+  },
+  "connectivity": ["wifi"],
+  "debug": {"openocd_target": "esp32s3.cfg"},
+  "frameworks": ["arduino", "espidf"],
+  "name": "Venti ESP32-S3FN8 USB dongle (8MB, no PSRAM)",
+  "upload": {
+    "flash_size": "8MB",
+    "maximum_ram_size": 327680,
+    "maximum_size": 8388608,
+    "require_upload_port": true,
+    "speed": 460800
+  },
+  "url": "https://github.com/VentiFBT1/SlimeVR-Tracker-ESP",
+  "vendor": "VentiFBT"
+}

@@ -24,6 +24,9 @@
 #include "Configuration.h"
 
 #include <LittleFS.h>
+#if USE_ESPNOW
+#include <Preferences.h>
+#endif
 
 #include <cstdint>
 #include <cstring>
@@ -116,6 +119,16 @@ void Configuration::setup() {
 		save();
 	}
 
+#if USE_ESPNOW
+	Preferences pairing;
+	if (pairing.begin("venti-espnow", true)) {
+		if (pairing.getBytesLength("receiver") == sizeof(m_ESPNowPairing)) {
+			m_ESPNowConfigured = pairing.getBytes("receiver", m_ESPNowPairing,
+				sizeof(m_ESPNowPairing)) == sizeof(m_ESPNowPairing);
+		}
+		pairing.end();
+	}
+#endif
 	loadSensors();
 
 	m_Loaded = true;
@@ -209,6 +222,9 @@ void Configuration::save() {
 }
 
 void Configuration::reset() {
+#if USE_ESPNOW
+	clearESPNowGateway();
+#endif
 	LittleFS.format();
 
 	m_Sensors.clear();
@@ -220,6 +236,39 @@ void Configuration::reset() {
 }
 
 int32_t Configuration::getVersion() const { return m_Config.version; }
+
+#if USE_ESPNOW
+const uint8_t* Configuration::getESPNowGatewayAddress() const {
+	return m_ESPNowConfigured ? m_ESPNowPairing : nullptr;
+}
+
+const uint8_t* Configuration::getESPNowSecurityCode() const {
+	return m_ESPNowConfigured ? m_ESPNowPairing + 6 : nullptr;
+}
+
+void Configuration::setESPNowGateway(const uint8_t* address, const uint8_t* securityCode) {
+	if (!address || !securityCode) return;
+	memcpy(m_ESPNowPairing, address, 6);
+	memcpy(m_ESPNowPairing + 6, securityCode, 8);
+	Preferences pairing;
+	if (pairing.begin("venti-espnow", false)) {
+		m_ESPNowConfigured = pairing.putBytes("receiver", m_ESPNowPairing,
+			sizeof(m_ESPNowPairing)) == sizeof(m_ESPNowPairing);
+		pairing.end();
+	}
+	if (!m_ESPNowConfigured) m_Logger.error("Could not save ESP-NOW pairing");
+}
+
+void Configuration::clearESPNowGateway() {
+	Preferences pairing;
+	if (pairing.begin("venti-espnow", false)) {
+		pairing.remove("receiver");
+		pairing.end();
+	}
+	m_ESPNowConfigured = false;
+	memset(m_ESPNowPairing, 0, sizeof(m_ESPNowPairing));
+}
+#endif
 
 size_t Configuration::getSensorCount() const { return m_Sensors.size(); }
 

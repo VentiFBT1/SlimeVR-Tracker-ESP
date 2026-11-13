@@ -36,12 +36,12 @@
 #endif
 
 #ifdef EXT_SERIAL_COMMANDS
-#define CALLBACK_SIZE 7  // Increase callback size to allow for debug commands
+#define CALLBACK_SIZE (7 + 2 * USE_ESPNOW)  // Increase callback size to allow for debug commands
 #include "i2cscan.h"
 #endif
 
 #ifndef CALLBACK_SIZE
-#define CALLBACK_SIZE 6  // Default callback size
+#define CALLBACK_SIZE (6 + 2 * USE_ESPNOW)  // Default callback size
 #endif
 
 #if defined(VENDOR_URL) && defined(VENDOR_NAME) && defined(PRODUCT_NAME) \
@@ -105,6 +105,8 @@ decode_base64_length_null(const char* const b64char, unsigned int* b64ssidlength
 void cmdSet(CmdParser* parser) {
 	if (parser->getParamCount() != 1) {
 		if (parser->equalCmdParam(1, "WIFI")) {
+#if !USE_ESPNOW
+
 			if (parser->getParamCount() < 3) {
 				logger.error("CMD SET WIFI ERROR: Too few arguments");
 				logger.info("Syntax: SET WIFI \"<SSID>\" \"<PASSWORD>\"");
@@ -120,7 +122,13 @@ void cmdSet(CmdParser* parser) {
 				wifiNetwork.setWiFiCredentials(sc_ssid, sc_pw);
 				logger.info("CMD SET WIFI OK: New wifi credentials set, reconnecting");
 			}
+
+#else
+			logger.error("Use PAIR for this ESP-NOW build");
+#endif
 		} else if (parser->equalCmdParam(1, "BWIFI")) {
+#if !USE_ESPNOW
+
 			if (parser->getParamCount() < 3) {
 				logger.error("CMD SET BWIFI ERROR: Too few arguments");
 				logger.info("Syntax: SET BWIFI <B64SSID> <B64PASSWORD>");
@@ -166,6 +174,10 @@ void cmdSet(CmdParser* parser) {
 				wifiNetwork.setWiFiCredentials(ssid, ppass);
 				logger.info("CMD SET BWIFI OK: New wifi credentials set, reconnecting");
 			}
+
+#else
+			logger.error("Use PAIR for this ESP-NOW build");
+#endif
 		} else if (parser->equalCmdParam(1, "FLASHMODE")) {
 #if ESP8266
 			logger.info(sCMDFlashmdoe);
@@ -198,6 +210,8 @@ void cmdSet(CmdParser* parser) {
 }
 
 void printState() {
+#if !USE_ESPNOW
+
 	logger.info(
 		"SlimeVR Tracker, board: %d, hardware: %d, protocol: %d, firmware: %s, "
 		"address: %s, mac: %s, status: %d, wifi state: %d",
@@ -210,6 +224,11 @@ void printState() {
 		statusManager.getStatus(),
 		static_cast<int>(wifiNetwork.getWiFiState())
 	);
+
+#else
+	logger.info("Venti ESP-NOW tracker: board %d, firmware %s, state %d, channel %u",
+		BOARD, FIRMWARE_VERSION, static_cast<int>(espNow.state), espNow.getChannel());
+#endif
 
 	logger.info("%s", FULL_VENDOR_STR);
 
@@ -293,6 +312,8 @@ void cmdGet(CmdParser* parser) {
 	}
 
 	if (parser->equalCmdParam(1, "TEST")) {
+#if !USE_ESPNOW
+
 		logger.info(
 			"[TEST] Board: %d, hardware: %d, protocol: %d, firmware: %s, address: %s, "
 			"mac: %s, status: %d, wifi state: %d",
@@ -305,6 +326,10 @@ void cmdGet(CmdParser* parser) {
 			statusManager.getStatus(),
 			static_cast<int>(wifiNetwork.getWiFiState())
 		);
+#else
+		printState();
+#endif
+
 		auto& sensor0 = sensorManager.getSensors()[0];
 		sensor0->motionLoop();
 		logger.info(
@@ -330,6 +355,8 @@ void cmdGet(CmdParser* parser) {
 	}
 
 	if (parser->equalCmdParam(1, "WIFISCAN")) {
+#if !USE_ESPNOW
+
 		logger.info("[WSCAN] Scanning for WiFi networks...");
 
 		// Scan would fail if connecting, stop connecting before scan
@@ -364,6 +391,10 @@ void cmdGet(CmdParser* parser) {
 		if (WiFi.status() != WL_CONNECTED) {
 			WiFi.begin();
 		}
+#else
+		logger.error("Wi-Fi scanning is unavailable in ESP-NOW mode");
+#endif
+
 	}
 }
 
@@ -434,6 +465,19 @@ void cmdScanI2C(CmdParser* parser) {
 }
 #endif
 
+#if USE_ESPNOW
+void cmdPair(CmdParser*) {
+	espNow.Pairing();
+	logger.info("PAIR: waiting for receiver pairing mode");
+}
+
+void cmdUnpair(CmdParser*) {
+	configuration.clearESPNowGateway();
+	espNow.Pairing();
+	logger.info("UNPAIR: saved receiver removed; entering pairing mode");
+}
+#endif
+
 void setUp() {
 	cmdCallbacks.addCmd("SET", &cmdSet);
 	cmdCallbacks.addCmd("GET", &cmdGet);
@@ -441,6 +485,10 @@ void setUp() {
 	cmdCallbacks.addCmd("REBOOT", &cmdReboot);
 	cmdCallbacks.addCmd("DELCAL", &cmdDeleteCalibration);
 	cmdCallbacks.addCmd("TCAL", &cmdTemperatureCalibration);
+#if USE_ESPNOW
+	cmdCallbacks.addCmd("PAIR", &cmdPair);
+	cmdCallbacks.addCmd("UNPAIR", &cmdUnpair);
+#endif
 #if EXT_SERIAL_COMMANDS
 	cmdCallbacks.addCmd("SCANI2C", &cmdScanI2C);
 #endif

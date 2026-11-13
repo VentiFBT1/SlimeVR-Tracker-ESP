@@ -13,6 +13,10 @@ const char* statusToString(Status status) {
 			return "WIFI_CONNECTING";
 		case SERVER_CONNECTING:
 			return "SERVER_CONNECTING";
+		case PAIRING_MODE:
+			return "PAIRING_MODE";
+		case UPDATING:
+			return "UPDATING";
 		default:
 			return "UNKNOWN";
 	}

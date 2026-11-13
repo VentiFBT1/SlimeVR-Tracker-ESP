@@ -1,0 +1,100 @@
+diff --git a/src/Serial.h b/src/Serial.h
+index 452c673..ed3a19d 100644
+--- a/src/Serial.h
++++ b/src/Serial.h
+@@ -1,4 +1,6 @@
+ #include <Arduino.h>
++#include <USB.h>
++#include <USBCDC.h>
+ #include <freertos/FreeRTOS.h>
+ #include <freertos/semphr.h>
+ 
+diff --git a/src/espnow/espnow.cpp b/src/espnow/espnow.cpp
+index 3304298..a1b668f 100644
+--- a/src/espnow/espnow.cpp
++++ b/src/espnow/espnow.cpp
+@@ -382,6 +382,7 @@ void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const
+ 
+ // Handles incoming ESPNOW messages
+ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
++    if (dataLen < 1 || dataLen > 250) return;
+     // Fast path: cast message once and read header
+     //Serial.printf("[ESPNOW] Received message of length %d from " MACSTR "\n", dataLen, MAC2ARGS(senderInfo->src_addr));
+     const ESPNowMessage *message = reinterpret_cast<const ESPNowMessage *>(data);
+@@ -389,6 +390,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+ 
+     // Optimize the most common case - TRACKER_DATA (hot path)
+     if (header == ESPNowMessageTypes::TRACKER_DATA) {
++        if (dataLen < 2 || message->packet.len != 16 || dataLen != 18) return;
+         // Fast validation: check if tracker is connected (most packets come from connected trackers)
+         const uint8_t *mac = senderInfo->src_addr;
+         Tracker* tracker = getTracker(mac);
+@@ -1071,4 +1073,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
+ 
+     // Blink LED twice to indicate reset action
+     ledManager.pattern(500, 300, 2);
+-}
+\ No newline at end of file
++}
+diff --git a/src/espnow/espnow.h b/src/espnow/espnow.h
+index 878a077..62ff3ad 100644
+--- a/src/espnow/espnow.h
++++ b/src/espnow/espnow.h
+@@ -76,7 +76,7 @@ class ESPNowCommunication {
+         static ESPNowCommunication instance;
+         ESPNowCommunication() = default;
+ 
+-        esp_now_rate_config_t rate_config;
++        esp_now_rate_config_t rate_config{};
+ 
+         void invokeTrackerConnectedEvent(Tracker tracker);
+         void invokeTrackerDisconnectedEvent(Tracker tracker);
+diff --git a/src/espnow/messages.h b/src/espnow/messages.h
+index d0dacd7..a6d742d 100644
+--- a/src/espnow/messages.h
++++ b/src/espnow/messages.h
+@@ -104,4 +104,10 @@ union ESPNowMessage {
+     ESPNowTrackerRateMessage trackerRate;
+     ESPNowEnterOtaModeMessage enterOtaMode;
+     ESPNowEnterOtaAckMessage enterOtaAck;
+-};
+\ No newline at end of file
++};
++
++static_assert(sizeof(ESPNowPairingAnnouncementMessage) == 10);
++static_assert(sizeof(ESPNowConnectionMessage) == 17);
++static_assert(sizeof(ESPNowConnectionAckMessage) == 17);
++static_assert(sizeof(ESPNowHeartbeatEchoMessage) == 3);
++static_assert(sizeof(ESPNowTrackerRateMessage) == 5);
+diff --git a/src/packetHandling.cpp b/src/packetHandling.cpp
+index 1fb5910..5cb80bf 100644
+--- a/src/packetHandling.cpp
++++ b/src/packetHandling.cpp
+@@ -1,6 +1,6 @@
+ #include "packetHandling.h"
+ #include "espnow/espnow.h"
+-#include "Configuration.h"
++#include "configuration.h"
+ #include "./espnow/espnow.h"
+ 
+ PacketHandling &PacketHandling::getInstance() {
+diff --git a/src/serialCom/Ident.h b/src/serialCom/Ident.h
+index 00f1d0f..96894b2 100644
+--- a/src/serialCom/Ident.h
++++ b/src/serialCom/Ident.h
+@@ -4,7 +4,7 @@
+ #include "MessageBuilder.h"
+ #include "./SerialCom.h"
+ #include "../GlobalVars.h"
+-#include "../Configuration.h"
++#include "../configuration.h"
+ 
+ namespace SlimeVR
+ {
+@@ -45,4 +45,4 @@ namespace SlimeVR
+                 }
+         };
+     }
+-}
+\ No newline at end of file
++}

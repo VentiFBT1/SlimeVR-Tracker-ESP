@@ -43,7 +43,12 @@ SlimeVR::LEDManager ledManager;
 SlimeVR::Status::StatusManager statusManager;
 SlimeVR::Configuration::Configuration configuration;
 SlimeVR::Network::Manager networkManager;
+#if USE_ESPNOW
+SlimeVR::Network::ConnectionESPNOW networkConnection;
+SlimeVR::ESPNow& espNow = SlimeVR::ESPNow::getInstance();
+#else
 SlimeVR::Network::Connection networkConnection;
+#endif
 SlimeVR::WiFiNetwork wifiNetwork;
 SlimeVR::WifiProvisioning wifiProvisioning;
 
@@ -154,7 +159,9 @@ void setup() {
 	sensorManager.setup();
 
 	networkManager.setup();
+#if !USE_ESPNOW
 	OTA::otaSetup(otaPassword);
+#endif
 	battery.Setup();
 
 	statusManager.setStatus(SlimeVR::Status::LOADING, false);
@@ -181,7 +188,9 @@ void loop() {
 	serialCommandsBM.after();
 
 	otaBM.before();
+#if !USE_ESPNOW
 	OTA::otaUpdate();
+#endif
 	otaBM.after();
 
 	networkManagerBM.before();

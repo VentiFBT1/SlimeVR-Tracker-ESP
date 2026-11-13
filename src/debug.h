@@ -114,4 +114,12 @@
 #define USE_OTA_TIMEOUT false
 #endif
 
+// Wi-Fi remains the default; the esp32c3_espnow environment opts in.
+#ifndef USE_ESPNOW
+#define USE_ESPNOW 0
+#endif
+#ifndef DONGLE_BASED_LIMITER
+#define DONGLE_BASED_LIMITER 0
+#endif
+
 #endif  // SLIMEVR_DEBUG_H_
