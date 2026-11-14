@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 
 #define USB_VID 0x1209
 #define USB_PID 0x7690
