@@ -8,7 +8,6 @@ import sys
 
 build = Path(sys.argv[1]).resolve()
 core = Path(os.environ.get("PLATFORMIO_CORE_DIR", Path.home() / ".platformio"))
-esptool = core / "packages/tool-esptoolpy/esptool.py"
 frameworks = list((core / "packages").glob("framework-arduinoespressif32*"))
 boot_apps = [p / "tools/partitions/boot_app0.bin" for p in frameworks
              if (p / "tools/partitions/boot_app0.bin").is_file()]
@@ -30,7 +29,7 @@ if not apps or apps[0][0] != 0x10000 or len(image) > apps[0][1]:
 
 output = build / "receiver-full-at-0x0.bin"
 subprocess.run([
-    sys.executable, str(esptool), "--chip", "esp32s3", "merge_bin",
+    sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge_bin",
     "--flash_mode", "dio", "--flash_freq", "80m", "--flash_size", "8MB",
     "-o", str(output),
     "0x0", str(build / "bootloader.bin"),

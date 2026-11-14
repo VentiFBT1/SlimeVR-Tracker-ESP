@@ -70,7 +70,9 @@ jobs:
       - name: Build receiver
         run: pio run -d .receiver-build -e venti_s3fn8
       - name: Validate and merge receiver image
-        run: python scripts/package_espnow_receiver.py .receiver-build/.pio/build/venti_s3fn8
+        run: |
+          pip install esptool==4.8.1
+          python scripts/package_espnow_receiver.py .receiver-build/.pio/build/venti_s3fn8
       - uses: actions/upload-artifact@v4
         with:
           name: receiver-venti-s3fn8
