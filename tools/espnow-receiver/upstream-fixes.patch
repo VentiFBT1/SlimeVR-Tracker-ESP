@@ -842,7 +842,7 @@ index c5fe518..8bc28ca 100644
      PacketHandling::getInstance().tick(hidDevice);
  }
 diff --git a/src/packetHandling.cpp b/src/packetHandling.cpp
-index 1fb5910..552c6a0 100644
+index 1fb5910..7724358 100644
 --- a/src/packetHandling.cpp
 +++ b/src/packetHandling.cpp
 @@ -1,6 +1,6 @@
@@ -892,8 +892,8 @@ index 1fb5910..552c6a0 100644
 -        reportsWritten++;
 -        priorityAvailable--;
 +    const uint32_t now = millis();
-+    const size_t priorityCount = std::min(priorityBuffer.size(), reportsPerTransfer);
-+    const size_t normalCount = std::min(buffer.size(), reportsPerTransfer - priorityCount);
++    const size_t priorityCount = std::min<size_t>(priorityBuffer.size(), reportsPerTransfer);
++    const size_t normalCount = std::min<size_t>(buffer.size(), reportsPerTransfer - priorityCount);
 +    // SlimeVR expects receiver traffic at least every 100 ms, even at rest.
 +    // Padding uses an unregistered device ID, never inventing tracker motion
 +    // or keeping a powered-off tracker falsely alive.

@@ -37,7 +37,7 @@ struct HIDDevice {
 struct Packet { uint8_t data[128]{}; };
 struct Buffer {
     std::deque<Packet> items;
-    size_t size() { return items.size(); }
+    uint8_t size() { return static_cast<uint8_t>(items.size()); }
     Packet& operator[](size_t i) { return items.at(i); }
     void shift() { assert(!items.empty()); items.pop_front(); }
     void add(uint8_t type,uint8_t id) { Packet p; p.data[0]=type; p.data[1]=id; items.push_back(p); }
