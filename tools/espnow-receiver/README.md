@@ -89,3 +89,20 @@ Hardware acceptance remains pending: keep the tracker unchanged, test sustained
 idle and moving operation, then repeated tracker and receiver power cycles.
 If USB still fails, isolate HID/CDC with the receiver radio disabled before
 changing tracker firmware or concluding that the dongle hardware is defective.
+
+## Blank tracker provisioning
+
+An application-only tracker update at 0x10000 cannot provision a blank chip.
+Use `scripts/package_espnow_tracker.py BUILD --boot-app0 PATH --output FILE`
+to merge the C3 bootloader at 0x0, partition table at 0x8000, matching Arduino
+OTA initializer at 0xe000, and application at 0x10000. The script validates
+C3 image checksums/digests, the partition MD5/capacity, and all merged offsets.
+Use the boot components from the same tracker build and its matching framework.
+
+The blank-board Test2 package uses the original Test2 CI artifact from commit
+263d5bc5cbf2d0e5a9e704707cb02e46cc9d541b / run 43521817190. Its application is
+identical to the tracker already paired with receiver Test7. The full image
+is 1,253,680 bytes, SHA-256
+`d1bddbf78a6c5114e4dac544255c360b60bc0bed6a1d599ca0cf9fdffa5f3de2`.
+It is intended for blank test boards and can overwrite settings if used on an
+existing tracker. The flasher exposes a separate blank-tracker selection.
