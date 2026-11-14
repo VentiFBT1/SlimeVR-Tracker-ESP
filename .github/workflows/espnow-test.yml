@@ -53,11 +53,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install platformio==6.1.18
+      - run: pip install platformio==6.2.0
       - uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: venti-espnow-pio-v1-receiver
+          key: venti-espnow-pio-receiver-core3312-v1
       - run: python tools/espnow-receiver/prepare.py .receiver-build
       - name: Test channel selection with ESP_OK and failure results
         run: python tools/espnow-receiver/test_channel_config.py .receiver-build

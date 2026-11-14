@@ -14,7 +14,9 @@ pio run -d .receiver-build -e venti_s3fn8
 Hardware: supplied ESP32-S3-Dongle v1.0g schematic, ESP32-S3FN8,
 8 MB flash, no PSRAM, button GPIO0 active low, blue LED GPIO1 active high.
 USB uses the S3 native OTG port, HID VID 0x1209/PID 0x7690.
-Arduino 3.0.1 and PlatformIO's espressif32 6.7.0 are pinned to match the tracker.
+Receiver Test7 pins pioarduino 55.03.312-1 (Arduino 3.3.12, IDF 5.5.5)
+and PlatformIO Core 6.2.0. The tracker keeps its existing framework and Test2
+firmware; matching wire formats do not require matching SDK versions.
 
 The small upstream patch uses the ESP32 esp_wifi_set_channel() API with its
 ESP_OK (zero) success result; Arduino 3.0.1's WiFi.setChannel also returns an
@@ -63,3 +65,27 @@ method 100,000 times with a busy endpoint at one timestamp and requires only one
 submission attempt. Queued reports are retained. Health adds internal chip
 temperature, and the standalone temperature command uses the hybrid USB stream.
 These are targeted scheduling fixes; no hardware-stability claim is made.
+
+Receiver Test7 changes the receiver framework bundle only. The upstream receiver
+master still matches our pinned source revision; the donor tracker `esp-now`
+branch also still matches our pinned revision. The separate `espnow` branch is
+an older divergent implementation, not a later update to the donor.
+
+The upstream receiver uses a moving pioarduino stable bundle; our previous
+overlay instead pinned Arduino 3.0.1. Espressif issue #10307 documents S2/S3
+CDC + HID stalls, and both the maintainer and reporter confirmed their reproducer
+worked on Arduino 3.3.8. This is a closely related failure mode, not proof that
+it caused our Windows USB descriptor errors. Later TinyUSB CDC stream races
+also received fixes (TinyUSB #3465). Test7 uses a coherent, pinned current
+bundle rather than adding more application-level workarounds.
+
+References checked 2026-11-13:
+- https://github.com/espressif/arduino-esp32/issues/10307#issuecomment-4527082826
+- https://github.com/espressif/arduino-esp32/issues/10307#issuecomment-4527235640
+- https://github.com/hathach/tinyusb/pull/3465
+- https://github.com/pioarduino/platform-espressif32/releases/tag/55.03.312-1
+
+Hardware acceptance remains pending: keep the tracker unchanged, test sustained
+idle and moving operation, then repeated tracker and receiver power cycles.
+If USB still fails, isolate HID/CDC with the receiver radio disabled before
+changing tracker firmware or concluding that the dongle hardware is defective.
