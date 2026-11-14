@@ -68,15 +68,92 @@ index 39a1687..1fb70c2 100644
 -platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
 -board = supermini_esp32s3
 -board_build.variants_dir = variants
+diff --git a/src/ConsoleCommandHandler.cpp b/src/ConsoleCommandHandler.cpp
+index 78c68f2..f48b464 100644
+--- a/src/ConsoleCommandHandler.cpp
++++ b/src/ConsoleCommandHandler.cpp
+@@ -3,16 +3,22 @@
+ 
+ void ConsoleCommandHandler::update() {
+     static String serialBuffer;
+-    while (Serial.available()) {
+-        char c = Serial.read();
++    static bool discardUntilNewline = false;
++    // Bound both CPU time and command memory; USB/UART floods cannot starve HID.
++    for (size_t budget = 0; budget < 64 && Serial.available() > 0; ++budget) {
++        const int value = Serial.read();
++        if (value < 0) break;
++        const char c = static_cast<char>(value);
+         if (c == '\n' || c == '\r') {
+-            serialBuffer.trim();
+-            if (serialBuffer.length() > 0) {
+-                processConsoleCommand(serialBuffer);
++            if (!discardUntilNewline) {
++                serialBuffer.trim();
++                if (serialBuffer.length() > 0) processConsoleCommand(serialBuffer);
+             }
+             serialBuffer = "";
+-        } else {
+-            serialBuffer += c;
++            discardUntilNewline = false;
++        } else if (!discardUntilNewline) {
++            if (serialBuffer.length() < 256) serialBuffer += c;
++            else { serialBuffer = ""; discardUntilNewline = true; }
+         }
+     }
+ }
+diff --git a/src/HID.cpp b/src/HID.cpp
+index 78b3a44..e22a579 100644
+--- a/src/HID.cpp
++++ b/src/HID.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <WiFi.h>
+ #include "USB.h"
++#include <tusb.h>
+ 
+ static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+   if (event_base == ARDUINO_USB_EVENTS) {
+@@ -64,14 +65,13 @@ void HIDDevice::begin() {
+     USB.manufacturerName(USB_MANUFACTURER);
+     USB.VID(USB_VID);
+     USB.PID(USB_PID);
+-    USB.begin();
++    // Allocate CDC RX/TX and HID synchronization before exposing USB to Windows.
+     Serial.begin(115200);
+-    delay(10);
+-    Serial.printf("USB Serial Number: %s\n", usbSerial);
+     HID.begin();
+-    
+     USB.onEvent(usbEventCallback);
+     USBSerial.onEvent(usbEventCallback);
++    USB.begin();
++    Serial.printf("USB Serial Number: %s\n", usbSerial);
+ }
+ 
+ uint16_t HIDDevice::_onGetDescriptor(uint8_t *buffer) {
+@@ -84,8 +84,9 @@ bool HIDDevice::send(const uint8_t *value, size_t size) {
+     if (!HID.ready()) {
+         return false;
+     }
+-    // Use shorter timeout to prevent blocking when USB is congested
+-    return HID.SendReport(0, value, size, 10);
++    // TinyUSB copies into its endpoint buffer before returning. Do not wait
++    // for a host completion callback on the radio/console main-loop task.
++    return tud_hid_n_report(0, 0, value, static_cast<uint16_t>(size));
+ }
+ 
+ bool HIDDevice::ready() {
 diff --git a/src/Serial.h b/src/Serial.h
-index 452c673..3561bb1 100644
+index 452c673..798881f 100644
 --- a/src/Serial.h
 +++ b/src/Serial.h
-@@ -1,156 +1,107 @@
+@@ -1,156 +1,111 @@
 +#pragma once
  #include <Arduino.h>
 +#include <USB.h>
 +#include <USBCDC.h>
++#include <tusb.h>
  #include <freertos/FreeRTOS.h>
  #include <freertos/semphr.h>
 +#include <algorithm>
@@ -118,7 +195,7 @@ index 452c673..3561bb1 100644
 +    bool lock() { return writeMutex && xSemaphoreTake(writeMutex, 0) == pdTRUE; }
 +    void unlock() { xSemaphoreGive(writeMutex); }
 +    void pumpUnlocked() {
-+        if (!usb || !static_cast<bool>(*usb)) {
++        if (!tud_cdc_n_connected(0)) {
 +            head = count = 0; // Never replay a previous serial session's reply.
 +            return;
          }
@@ -130,18 +207,20 @@ index 452c673..3561bb1 100644
 -        n += uart->write(buffer, size);
 -        if (usb && usb->availableForWrite() > 0) {
 -            n += usb->write(buffer, size);
-+        int available = usb->availableForWrite();
++        int available = static_cast<int>(tud_cdc_n_write_available(0));
 +        if (available <= 0 || count == 0) return;
 +        size_t length = std::min(count, static_cast<size_t>(available));
 +        length = std::min(length, Capacity - head);
 +        length = std::min(length, size_t{64});
-+        // Arduino 3.0.1 USBCDC::write can spin if length exceeds FIFO space.
-+        size_t sent = std::min(length, usb->write(pending + head, length));
++        // Bypass USBCDC::write's unbounded retry loop. TinyUSB returns the
++        // bytes accepted now, including zero if endpoint capacity changed.
++        size_t sent = std::min(length, static_cast<size_t>(tud_cdc_n_write(0, pending + head, length)));
++        if (sent) tud_cdc_n_write_flush(0);
 +        head = (head + sent) % Capacity;
 +        count -= sent;
 +    }
 +    bool enqueueUnlocked(const uint8_t* data, size_t size, bool newline) {
-+        if (!usb || !static_cast<bool>(*usb)) return false;
++        if (!tud_cdc_n_connected(0)) return false;
 +        size_t required = size + (newline ? 2 : 0);
 +        if (required > Capacity - count) return false;
 +        for (size_t i = 0; i < size; ++i) pending[(head + count++) % Capacity] = data[i];
@@ -177,7 +256,8 @@ index 452c673..3561bb1 100644
 +    HybridSerial() : writeMutex(xSemaphoreCreateMutexStatic(&mutexBuffer)) {}
      void begin(unsigned long baud = 115200) {
          uart->begin(baud);
-+        usb->setTxTimeoutMs(5);
++        usb->enableReboot(false); // Console opens must not trigger a reboot sequence.
++        usb->setTxTimeoutMs(0);
          usb->begin();
      }
 -    
@@ -192,7 +272,7 @@ index 452c673..3561bb1 100644
 -            return n;
 -        }
 -        return 0;
-+    void beginUSB() { usb->setTxTimeoutMs(5); usb->begin(); }
++    void beginUSB() { usb->enableReboot(false); usb->setTxTimeoutMs(0); usb->begin(); }
 +    void tick() {
 +        if (!lock()) return;
 +        pumpUnlocked();
@@ -307,7 +387,7 @@ index 452c673..3561bb1 100644
 +    int read() override { return usb->available() ? usb->read() : uart->read(); }
 +    int peek() override { return usb->available() ? usb->peek() : uart->peek(); }
 +    void flush() override { tick(); } // Service once; never wait for an unread host.
-+    explicit operator bool() const { return static_cast<bool>(*usb) || static_cast<bool>(*uart); }
++    explicit operator bool() const { return tud_cdc_n_connected(0) || static_cast<bool>(*uart); }
  };
  
 -#endif
@@ -401,7 +481,7 @@ index 5d9e78c..df5858f 100644
  
  size_t Configuration::getSavedTrackerCount() {
 diff --git a/src/espnow/espnow.cpp b/src/espnow/espnow.cpp
-index 3304298..f2039a5 100644
+index 3304298..122653c 100644
 --- a/src/espnow/espnow.cpp
 +++ b/src/espnow/espnow.cpp
 @@ -150,16 +150,16 @@ bool ESPNowCommunication::disconnectSingleTracker(const uint8_t mac[6]) {
@@ -471,7 +551,7 @@ index 3304298..f2039a5 100644
          Serial.println("[ESPNOW] No saved WiFi channel found, scanning environment...");
          enterEnvironmentScanningMode();
      }
-@@ -375,13 +370,39 @@ ErrorCodes ESPNowCommunication::begin() {
+@@ -375,13 +370,43 @@ ErrorCodes ESPNowCommunication::begin() {
  
  // ESPNOW receive callback
  void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
@@ -505,6 +585,10 @@ index 3304298..f2039a5 100644
 +            static_cast<unsigned long>(tracker.lastMotionTime ? millis() - tracker.lastMotionTime : UINT32_MAX),
 +            tracker.missedPings);
 +    }
++    auto& packets = PacketHandling::getInstance();
++    Serial.printf("[USB] accepted=%lu failed=%lu\n",
++        static_cast<unsigned long>(packets.usbAccepted()),
++        static_cast<unsigned long>(packets.usbFailed()));
 +    Serial.println("[HEALTH END]");
  }
  
@@ -514,7 +598,7 @@ index 3304298..f2039a5 100644
      // Fast path: cast message once and read header
      //Serial.printf("[ESPNOW] Received message of length %d from " MACSTR "\n", dataLen, MAC2ARGS(senderInfo->src_addr));
      const ESPNowMessage *message = reinterpret_cast<const ESPNowMessage *>(data);
-@@ -389,6 +410,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -389,6 +414,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
  
      // Optimize the most common case - TRACKER_DATA (hot path)
      if (header == ESPNowMessageTypes::TRACKER_DATA) {
@@ -522,7 +606,7 @@ index 3304298..f2039a5 100644
          // Fast validation: check if tracker is connected (most packets come from connected trackers)
          const uint8_t *mac = senderInfo->src_addr;
          Tracker* tracker = getTracker(mac);
-@@ -403,6 +425,10 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -403,6 +429,10 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
  
          tracker->bytesReceived += message->packet.len;
          tracker->packetsReceived += 1;
@@ -533,7 +617,7 @@ index 3304298..f2039a5 100644
  
          // Forward packet to PacketHandling with RSSI
          PacketHandling::getInstance().insert(message->packet.data, message->packet.len, senderInfo->rx_ctrl->rssi);
-@@ -412,6 +438,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -412,6 +442,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
      // Handle less frequent message types
      switch (header) {
      case ESPNowMessageTypes::PAIRING_REQUEST: {
@@ -541,7 +625,7 @@ index 3304298..f2039a5 100644
          const ESPNowPairingMessage &request = message->pairing;
          if (memcmp(request.securityBytes, securityCode, 8) != 0) return; // Invalid security code
  
-@@ -446,6 +473,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -446,6 +477,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
      case ESPNowMessageTypes::PAIRING_RESPONSE:
          return;
      case ESPNowMessageTypes::HANDSHAKE_REQUEST: {
@@ -549,7 +633,7 @@ index 3304298..f2039a5 100644
          const ESPNowConnectionMessage &handshake = message->connection;
          // Validate security code
          if (memcmp(handshake.securityBytes, securityCode, 8) != 0) {
-@@ -517,6 +545,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -517,6 +549,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
          return;
      }
      case ESPNowMessageTypes::HEARTBEAT_ECHO: {
@@ -557,7 +641,7 @@ index 3304298..f2039a5 100644
          // Fast MAC lookup for connected tracker
          const uint8_t *mac = senderInfo->src_addr;
          Tracker *tracker = getTracker(mac);
-@@ -531,6 +560,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -531,6 +564,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
          return;
      }
      case ESPNowMessageTypes::HEARTBEAT_RESPONSE: {
@@ -565,7 +649,7 @@ index 3304298..f2039a5 100644
          // Find the tracker and update heartbeat info
          const uint8_t *mac = senderInfo->src_addr;
          Tracker *tracker = getTracker(mac);
-@@ -706,10 +736,10 @@ void ESPNowCommunication::scanningLoop() {
+@@ -706,10 +740,10 @@ void ESPNowCommunication::scanningLoop() {
              int primaryChannels[3] = {1, 6, 11};
              int bestPrimary = -1;
              uint32_t minPrimaryBytes = UINT32_MAX;
@@ -578,7 +662,7 @@ index 3304298..f2039a5 100644
                      if (channelBytesSeen[ch] < minBytes) {
                          minBytes = channelBytesSeen[ch];
                          bestChannel = ch;
-@@ -748,7 +778,8 @@ void ESPNowCommunication::scanningLoop() {
+@@ -748,7 +782,8 @@ void ESPNowCommunication::scanningLoop() {
              }
  
              //Restart wifi
@@ -588,7 +672,7 @@ index 3304298..f2039a5 100644
          } else {
              // Move to next channel
              WiFi.setChannel(WiFi.channel() + 1);
-@@ -762,6 +793,7 @@ void ESPNowCommunication::scanningLoop() {
+@@ -762,6 +797,7 @@ void ESPNowCommunication::scanningLoop() {
  
  // Main update loop to be called regularly
  void ESPNowCommunication::update() {
@@ -596,7 +680,7 @@ index 3304298..f2039a5 100644
      const unsigned long currentTime = millis();
      
      // Throttle updates to reduce CPU usage - skip if called too frequently
-@@ -782,8 +814,10 @@ void ESPNowCommunication::update() {
+@@ -782,8 +818,10 @@ void ESPNowCommunication::update() {
  
              uint32_t deltaTime = currentTime - tracker.lastDeltaTime;
              tracker.lastDeltaTime = currentTime;
@@ -609,7 +693,7 @@ index 3304298..f2039a5 100644
              tracker.bytesReceived = 0;
              tracker.packetsReceived = 0;
  
-@@ -816,8 +850,11 @@ void ESPNowCommunication::update() {
+@@ -816,8 +854,11 @@ void ESPNowCommunication::update() {
                  if (tracker.missedPings >= maxMissedPings)
                  {
                      //Serial.printf("Removing tracker " MACSTR " (ID: %d) due to missed heartbeats\n", MAC2ARGS(tracker.mac.data()), tracker.trackerId);
@@ -623,7 +707,7 @@ index 3304298..f2039a5 100644
                  }
              }
  
-@@ -1051,9 +1088,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
+@@ -1051,9 +1092,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
          enteredPromiscuousMode = false;
          Serial.println("Exited promiscuous mode, stopping environment scanning");
      }
@@ -634,7 +718,7 @@ index 3304298..f2039a5 100644
      if (SlimeVR::SerialCom::comEnabled()) {
          SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
      }
-@@ -1071,4 +1108,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
+@@ -1071,4 +1112,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
  
      // Blink LED twice to indicate reset action
      ledManager.pattern(500, 300, 2);
@@ -758,7 +842,7 @@ index c5fe518..8bc28ca 100644
      PacketHandling::getInstance().tick(hidDevice);
  }
 diff --git a/src/packetHandling.cpp b/src/packetHandling.cpp
-index 1fb5910..5cb80bf 100644
+index 1fb5910..552c6a0 100644
 --- a/src/packetHandling.cpp
 +++ b/src/packetHandling.cpp
 @@ -1,6 +1,6 @@
@@ -769,6 +853,129 @@ index 1fb5910..5cb80bf 100644
  #include "./espnow/espnow.h"
  
  PacketHandling &PacketHandling::getInstance() {
+@@ -105,76 +105,35 @@ void PacketHandling::createRegistrationReport(uint8_t *report, ESPNowCommunicati
+ }
+ 
+ void PacketHandling::tick(HIDDevice &hidDevice) {
+-    // PPS print every second (packet types 0-4)
+     if (!hidDevice.ready()) return;
+-
+-    // Throttle to prevent overwhelming USB endpoint
+-    // unsigned long now = millis();
+-    // unsigned long interval = now - lastSendAttempt;
+-    // if (interval < minSendIntervalMs) return;
+-
+-    //NOTE: This can be expensive if theres a lot of trackers paired, thats why its commented out for now
+-    // if (now - lastDiscoSweep > 5000) {
+-    //     //Serial.println("[DISCO] Sending disconnection statuses for unused trackers");
+-    //     lastDiscoSweep = now;
+-    //     auto &espnow = ESPNowCommunication::getInstance();
+-    //     auto pairedIds = Configuration::getInstance().getAllPairedTrackerIds();
+-    //     for (uint8_t id : pairedIds) {
+-    //         if (!espnow.isTrackerIdConnected(id)) {
+-    //             sendDisconnectionStatus(id);
+-    //         }
+-    //     }
+-    // }
+-
+-    // Prepare 64-byte transfer buffer (4 reports of 16 bytes each)
+-    static constexpr uint8_t invalidPacketType = 0xFE;
+-    uint8_t transferBuffer[hidTransferSize];
+-    memset(transferBuffer, 0, sizeof(transferBuffer));
+-    size_t reportsWritten = 0;
+-
+-    // Check to see if theres an available high-priority registration to send
+-    size_t priorityAvailable = priorityBuffer.size();
+-    if (priorityAvailable > 0) {
+-        Packet priorityPacket = priorityBuffer.shift();
+-        memcpy(&transferBuffer[reportsWritten * reportSize], priorityPacket.data, reportSize);
+-        reportsWritten++;
+-        priorityAvailable--;
++    const uint32_t now = millis();
++    const size_t priorityCount = std::min(priorityBuffer.size(), reportsPerTransfer);
++    const size_t normalCount = std::min(buffer.size(), reportsPerTransfer - priorityCount);
++    // SlimeVR expects receiver traffic at least every 100 ms, even at rest.
++    // Padding uses an unregistered device ID, never inventing tracker motion
++    // or keeping a powered-off tracker falsely alive.
++    if (priorityCount + normalCount == 0 && now - lastSendAttempt < 50) return;
++    uint8_t transferBuffer[hidTransferSize]{};
++    for (size_t i = 0; i < reportsPerTransfer; ++i) {
++        transferBuffer[i * reportSize] = 0xFE;
++        transferBuffer[i * reportSize + 1] = 0xFF;
+     }
+-
+-    // Check if we have any regular packets to send or if we should send a registration report
+-    size_t availableReports = buffer.size();
+-    if (availableReports > 0) {
+-        size_t reportsToSend = std::min(availableReports, reportsPerTransfer - reportsWritten);
+-        for (size_t i = 0; i < reportsToSend; i++) {
+-            Packet packet = buffer.shift();
+-            memcpy(&transferBuffer[reportsWritten * reportSize], packet.data, reportSize);
+-            reportsWritten++;
+-        }
++    size_t index = 0;
++    for (size_t i = 0; i < priorityCount; ++i, ++index) {
++        memcpy(transferBuffer + index * reportSize, priorityBuffer[i].data, reportSize);
+     }
+-
+-    if (reportsWritten < reportsPerTransfer && priorityAvailable > 0) {
+-        // We have space for more reports and still have high-priority ones waiting - fill remaining space with them
+-        while (reportsWritten < reportsPerTransfer && priorityAvailable > 0) {
+-            Packet priorityPacket = priorityBuffer.shift();
+-            memcpy(&transferBuffer[reportsWritten * reportSize], priorityPacket.data, reportSize);
+-            reportsWritten++;
+-            priorityAvailable--;
+-        }
++    for (size_t i = 0; i < normalCount; ++i, ++index) {
++        memcpy(transferBuffer + index * reportSize, buffer[i].data, reportSize);
+     }
+-
+-    const size_t realReportsWritten = reportsWritten;
+-
+-    // Fill unused report slots with a full invalid report so slimevr skips these empty reports:
+-    // [0] = invalid packet type, [1..15] = 0
+-    while (reportsWritten < reportsPerTransfer) {
+-        uint8_t *report = &transferBuffer[reportsWritten * reportSize];
+-        report[0] = invalidPacketType;
+-        reportsWritten++;
++    // Commit FIFO removal only when TinyUSB has accepted the transfer.
++    if (!hidDevice.send(transferBuffer, sizeof(transferBuffer))) {
++        ++failedUSBTransfers;
++        return;
+     }
+-
+-    // Only send if we have reports to send
+-    if (realReportsWritten > 0 && !hidDevice.send(transferBuffer, hidTransferSize)) Serial.println("[USB] Send failed");
+-    // Print how long it took to send the reports for debugging
++    for (size_t i = 0; i < priorityCount; ++i) priorityBuffer.shift();
++    for (size_t i = 0; i < normalCount; ++i) buffer.shift();
++    lastSendAttempt = now;
++    ++acceptedUSBTransfers;
+ }
+ 
+ PacketHandling PacketHandling::instance;
+diff --git a/src/packetHandling.h b/src/packetHandling.h
+index 7579627..871efd1 100644
+--- a/src/packetHandling.h
++++ b/src/packetHandling.h
+@@ -19,6 +19,8 @@ public:
+     void insertPriority(const uint8_t *data, uint8_t len);
+     void sendDisconnectionStatus(uint8_t trackerId);
+     void tick(HIDDevice &hidDevice);
++    uint32_t usbAccepted() const { return acceptedUSBTransfers; }
++    uint32_t usbFailed() const { return failedUSBTransfers; }
+     void createRegistrationReport(uint8_t *report, ESPNowCommunication::Tracker tracker);
+ 
+ private:
+@@ -54,6 +56,8 @@ private:
+     
+     // Statistics
+     unsigned long droppedReports = 0;
++    uint32_t acceptedUSBTransfers = 0;
++    uint32_t failedUSBTransfers = 0;
+     
+     void createRegistrationReport(uint8_t *report, size_t trackerIndex);
+ };
 diff --git a/src/serialCom/Ident.h b/src/serialCom/Ident.h
 index 00f1d0f..96894b2 100644
 --- a/src/serialCom/Ident.h

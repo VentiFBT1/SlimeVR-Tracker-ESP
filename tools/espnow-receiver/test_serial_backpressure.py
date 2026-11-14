@@ -12,6 +12,7 @@ stub = r'''
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <algorithm>
 using String = std::string;
 struct Stream {
     virtual ~Stream() = default;
@@ -35,24 +36,40 @@ struct HardwareSerial {
 extern HardwareSerial Serial0;
 struct USBCDC {
     bool connected = true;
+    bool arduinoConnected = true;
+    bool reboot = true;
     int space = 0;
     std::vector<uint8_t> output;
     void begin() {}
     void setTxTimeoutMs(uint32_t) {}
+    void enableReboot(bool enabled) { reboot = enabled; }
     int availableForWrite() { return connected ? space : 0; }
     size_t write(const uint8_t* bytes, size_t length) {
-        // The real Arduino driver can spin indefinitely if this is violated.
-        assert(connected && length <= static_cast<size_t>(space));
-        output.insert(output.end(), bytes, bytes + length);
-        space -= length;
-        return length;
+        (void)bytes; (void)length;
+        assert(false); // Never enter the SDK's retrying write implementation.
+        return 0;
     }
     int available() { return 0; }
     int read() { return -1; }
     int peek() { return -1; }
     void flush() { assert(false); }
-    explicit operator bool() const { return connected; }
+    explicit operator bool() const { return arduinoConnected; }
 };
+extern USBCDC USBSerial;
+inline bool returnZeroOnce = false;
+inline size_t writeLimit = 64;
+inline bool tud_cdc_n_connected(uint8_t) { return USBSerial.connected; }
+inline uint32_t tud_cdc_n_write_available(uint8_t) { return USBSerial.connected ? USBSerial.space : 0; }
+inline uint32_t tud_cdc_n_write(uint8_t, const void* data, uint32_t length) {
+    assert(USBSerial.connected && length <= static_cast<uint32_t>(USBSerial.space));
+    if (returnZeroOnce) { returnZeroOnce = false; return 0; }
+    length = std::min(length, static_cast<uint32_t>(writeLimit));
+    const auto* bytes=static_cast<const uint8_t*>(data);
+    USBSerial.output.insert(USBSerial.output.end(), bytes, bytes+length);
+    USBSerial.space -= length;
+    return length;
+}
+inline uint32_t tud_cdc_n_write_flush(uint8_t) { return 0; }
 struct StaticSemaphore_t { bool held = false; };
 using SemaphoreHandle_t = StaticSemaphore_t*;
 constexpr int pdTRUE = 1;
@@ -77,6 +94,8 @@ void drain(HybridSerial& serial, int ticks = 100) {
 int main() {
     HybridSerial serial;
     serial.begin();
+    assert(!USBSerial.reboot);
+    USBSerial.arduinoConnected = false; // SDK line-state flag must not suppress live TinyUSB.
     USBSerial.space = 4;
     std::string payload(120, 'A');
     assert(serial.writeLine(reinterpret_cast<const uint8_t*>(payload.data()), payload.size()) == 122);
@@ -111,12 +130,18 @@ int main() {
     serial.flush();
     drain(serial);
     assert(std::string(USBSerial.output.begin(), USBSerial.output.end()) == "next\r\n");
+
+    USBSerial.output.clear();
+    writeLimit = 2; returnZeroOnce = true; USBSerial.space = 8;
+    serial.println("partial");
+    drain(serial);
+    assert(std::string(USBSerial.output.begin(), USBSerial.output.end()) == "partial\r\n");
 }
 '''
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     (root / 'stub.h').write_text(stub)
-    for name in ['Arduino.h', 'USB.h', 'USBCDC.h', 'freertos/FreeRTOS.h', 'freertos/semphr.h']:
+    for name in ['Arduino.h', 'USB.h', 'USBCDC.h', 'tusb.h', 'freertos/FreeRTOS.h', 'freertos/semphr.h']:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('#include "stub.h"\n')

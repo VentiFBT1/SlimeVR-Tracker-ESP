@@ -41,3 +41,16 @@ simulated 100-Hz senders, checks copied callback buffers and zero-wait overload,
 and enables checked STL iterators. This is a software regression, not proof of
 ten-tracker RF/USB capacity. First validate sustained motion and repeated tracker
 power-cycle reconnection with one physical tracker; then increase tracker count.
+
+Receiver test5 addresses USB failure modes observed after test4. CDC and HID
+state are initialized before USB enumeration. CDC TX calls TinyUSB's bounded
+write directly instead of the SDK's retry loop, and console opens cannot trigger
+the SDK's automatic reboot sequence (use the hardware BOOT button for flashing).
+HID reports are submitted without waiting for completion on the main-loop task;
+reports remain queued if submission fails. Empty receiver keep-alives every
+50 ms avoid SlimeVR's idle-device reopen path without fabricating tracker data.
+Console input is bounded to 64 bytes per loop and 256 bytes per command.
+
+These changes address concrete USB scheduling hazards and protocol mismatch;
+they do not establish the root cause of Windows Code 43. Hardware validation is
+still required, including idle, motion, reconnect and opening/closing diagnostics.
