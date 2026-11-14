@@ -422,6 +422,16 @@ index 6808a59..bc6bb2d 100644
 -}
 \ No newline at end of file
 +}
+diff --git a/src/commands/TemperatureCommand.cpp b/src/commands/TemperatureCommand.cpp
+index 7671629..24dce02 100644
+--- a/src/commands/TemperatureCommand.cpp
++++ b/src/commands/TemperatureCommand.cpp
+@@ -1,4 +1,5 @@
+ #include "TemperatureCommand.h"
++#include "Serial.h"
+ 
+ #ifdef __cplusplus
+ extern "C" {
 diff --git a/src/configuration.cpp b/src/configuration.cpp
 index 5d9e78c..df5858f 100644
 --- a/src/configuration.cpp
@@ -481,7 +491,7 @@ index 5d9e78c..df5858f 100644
  
  size_t Configuration::getSavedTrackerCount() {
 diff --git a/src/espnow/espnow.cpp b/src/espnow/espnow.cpp
-index 3304298..122653c 100644
+index 3304298..fc14d08 100644
 --- a/src/espnow/espnow.cpp
 +++ b/src/espnow/espnow.cpp
 @@ -150,16 +150,16 @@ bool ESPNowCommunication::disconnectSingleTracker(const uint8_t mac[6]) {
@@ -551,7 +561,7 @@ index 3304298..122653c 100644
          Serial.println("[ESPNOW] No saved WiFi channel found, scanning environment...");
          enterEnvironmentScanningMode();
      }
-@@ -375,13 +370,43 @@ ErrorCodes ESPNowCommunication::begin() {
+@@ -375,13 +370,44 @@ ErrorCodes ESPNowCommunication::begin() {
  
  // ESPNOW receive callback
  void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
@@ -589,6 +599,7 @@ index 3304298..122653c 100644
 +    Serial.printf("[USB] accepted=%lu failed=%lu\n",
 +        static_cast<unsigned long>(packets.usbAccepted()),
 +        static_cast<unsigned long>(packets.usbFailed()));
++    Serial.printf("[TEMP] chip_c=%.1f\n", temperatureRead());
 +    Serial.println("[HEALTH END]");
  }
  
@@ -598,7 +609,7 @@ index 3304298..122653c 100644
      // Fast path: cast message once and read header
      //Serial.printf("[ESPNOW] Received message of length %d from " MACSTR "\n", dataLen, MAC2ARGS(senderInfo->src_addr));
      const ESPNowMessage *message = reinterpret_cast<const ESPNowMessage *>(data);
-@@ -389,6 +414,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -389,6 +415,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
  
      // Optimize the most common case - TRACKER_DATA (hot path)
      if (header == ESPNowMessageTypes::TRACKER_DATA) {
@@ -606,7 +617,7 @@ index 3304298..122653c 100644
          // Fast validation: check if tracker is connected (most packets come from connected trackers)
          const uint8_t *mac = senderInfo->src_addr;
          Tracker* tracker = getTracker(mac);
-@@ -403,6 +429,10 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -403,6 +430,10 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
  
          tracker->bytesReceived += message->packet.len;
          tracker->packetsReceived += 1;
@@ -617,7 +628,7 @@ index 3304298..122653c 100644
  
          // Forward packet to PacketHandling with RSSI
          PacketHandling::getInstance().insert(message->packet.data, message->packet.len, senderInfo->rx_ctrl->rssi);
-@@ -412,6 +442,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -412,6 +443,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
      // Handle less frequent message types
      switch (header) {
      case ESPNowMessageTypes::PAIRING_REQUEST: {
@@ -625,7 +636,7 @@ index 3304298..122653c 100644
          const ESPNowPairingMessage &request = message->pairing;
          if (memcmp(request.securityBytes, securityCode, 8) != 0) return; // Invalid security code
  
-@@ -446,6 +477,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -446,6 +478,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
      case ESPNowMessageTypes::PAIRING_RESPONSE:
          return;
      case ESPNowMessageTypes::HANDSHAKE_REQUEST: {
@@ -633,7 +644,7 @@ index 3304298..122653c 100644
          const ESPNowConnectionMessage &handshake = message->connection;
          // Validate security code
          if (memcmp(handshake.securityBytes, securityCode, 8) != 0) {
-@@ -517,6 +549,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -517,6 +550,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
          return;
      }
      case ESPNowMessageTypes::HEARTBEAT_ECHO: {
@@ -641,7 +652,7 @@ index 3304298..122653c 100644
          // Fast MAC lookup for connected tracker
          const uint8_t *mac = senderInfo->src_addr;
          Tracker *tracker = getTracker(mac);
-@@ -531,6 +564,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
+@@ -531,6 +565,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
          return;
      }
      case ESPNowMessageTypes::HEARTBEAT_RESPONSE: {
@@ -649,7 +660,7 @@ index 3304298..122653c 100644
          // Find the tracker and update heartbeat info
          const uint8_t *mac = senderInfo->src_addr;
          Tracker *tracker = getTracker(mac);
-@@ -706,10 +740,10 @@ void ESPNowCommunication::scanningLoop() {
+@@ -706,10 +741,10 @@ void ESPNowCommunication::scanningLoop() {
              int primaryChannels[3] = {1, 6, 11};
              int bestPrimary = -1;
              uint32_t minPrimaryBytes = UINT32_MAX;
@@ -662,7 +673,7 @@ index 3304298..122653c 100644
                      if (channelBytesSeen[ch] < minBytes) {
                          minBytes = channelBytesSeen[ch];
                          bestChannel = ch;
-@@ -748,7 +782,8 @@ void ESPNowCommunication::scanningLoop() {
+@@ -748,7 +783,8 @@ void ESPNowCommunication::scanningLoop() {
              }
  
              //Restart wifi
@@ -672,7 +683,7 @@ index 3304298..122653c 100644
          } else {
              // Move to next channel
              WiFi.setChannel(WiFi.channel() + 1);
-@@ -762,6 +797,7 @@ void ESPNowCommunication::scanningLoop() {
+@@ -762,6 +798,7 @@ void ESPNowCommunication::scanningLoop() {
  
  // Main update loop to be called regularly
  void ESPNowCommunication::update() {
@@ -680,7 +691,7 @@ index 3304298..122653c 100644
      const unsigned long currentTime = millis();
      
      // Throttle updates to reduce CPU usage - skip if called too frequently
-@@ -782,8 +818,10 @@ void ESPNowCommunication::update() {
+@@ -782,8 +819,10 @@ void ESPNowCommunication::update() {
  
              uint32_t deltaTime = currentTime - tracker.lastDeltaTime;
              tracker.lastDeltaTime = currentTime;
@@ -693,7 +704,7 @@ index 3304298..122653c 100644
              tracker.bytesReceived = 0;
              tracker.packetsReceived = 0;
  
-@@ -816,8 +854,11 @@ void ESPNowCommunication::update() {
+@@ -816,8 +855,11 @@ void ESPNowCommunication::update() {
                  if (tracker.missedPings >= maxMissedPings)
                  {
                      //Serial.printf("Removing tracker " MACSTR " (ID: %d) due to missed heartbeats\n", MAC2ARGS(tracker.mac.data()), tracker.trackerId);
@@ -707,7 +718,7 @@ index 3304298..122653c 100644
                  }
              }
  
-@@ -1051,9 +1092,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
+@@ -1051,9 +1093,9 @@ void ESPNowCommunication::exitEnvironmentScanningMode() {
          enteredPromiscuousMode = false;
          Serial.println("Exited promiscuous mode, stopping environment scanning");
      }
@@ -718,7 +729,7 @@ index 3304298..122653c 100644
      if (SlimeVR::SerialCom::comEnabled()) {
          SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
      }
-@@ -1071,4 +1112,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
+@@ -1071,4 +1113,4 @@ void ESPNowCommunication::UnpairAllTrackers() {
  
      // Blink LED twice to indicate reset action
      ledManager.pattern(500, 300, 2);
@@ -823,10 +834,10 @@ index d0dacd7..a6d742d 100644
 +static_assert(sizeof(ESPNowHeartbeatEchoMessage) == 3);
 +static_assert(sizeof(ESPNowTrackerRateMessage) == 5);
 diff --git a/src/main.cpp b/src/main.cpp
-index c5fe518..8bc28ca 100644
+index c5fe518..f1e72fc 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -99,12 +99,14 @@ void setup() {
+@@ -99,12 +99,17 @@ void setup() {
  }
  
  void loop() {
@@ -840,9 +851,12 @@ index c5fe518..8bc28ca 100644
 +    Serial.tick();
  
      PacketHandling::getInstance().tick(hidDevice);
++    // Yield every pass, including busy-USB periods, so the idle/USB/system
++    // tasks can run. Do not spin a core continuously while waiting for a host.
++    delay(1);
  }
 diff --git a/src/packetHandling.cpp b/src/packetHandling.cpp
-index 1fb5910..7724358 100644
+index 1fb5910..b4de7b0 100644
 --- a/src/packetHandling.cpp
 +++ b/src/packetHandling.cpp
 @@ -1,6 +1,6 @@
@@ -853,7 +867,7 @@ index 1fb5910..7724358 100644
  #include "./espnow/espnow.h"
  
  PacketHandling &PacketHandling::getInstance() {
-@@ -105,76 +105,35 @@ void PacketHandling::createRegistrationReport(uint8_t *report, ESPNowCommunicati
+@@ -105,76 +105,40 @@ void PacketHandling::createRegistrationReport(uint8_t *report, ESPNowCommunicati
  }
  
  void PacketHandling::tick(HIDDevice &hidDevice) {
@@ -898,6 +912,11 @@ index 1fb5910..7724358 100644
 +    // Padding uses an unregistered device ID, never inventing tracker motion
 +    // or keeping a powered-off tracker falsely alive.
 +    if (priorityCount + normalCount == 0 && now - lastSendAttempt < 50) return;
++    // A busy endpoint must not become an unbounded hot retry loop.
++    // At most one attempt per millisecond still supports 4000 report slots/s.
++    const uint32_t nowMicros = micros();
++    if (static_cast<uint32_t>(nowMicros - lastUSBSubmitMicros) < 1000) return;
++    lastUSBSubmitMicros = nowMicros;
 +    uint8_t transferBuffer[hidTransferSize]{};
 +    for (size_t i = 0; i < reportsPerTransfer; ++i) {
 +        transferBuffer[i * reportSize] = 0xFE;
@@ -955,7 +974,7 @@ index 1fb5910..7724358 100644
  
  PacketHandling PacketHandling::instance;
 diff --git a/src/packetHandling.h b/src/packetHandling.h
-index 7579627..871efd1 100644
+index 7579627..920ffee 100644
 --- a/src/packetHandling.h
 +++ b/src/packetHandling.h
 @@ -19,6 +19,8 @@ public:
@@ -967,12 +986,13 @@ index 7579627..871efd1 100644
      void createRegistrationReport(uint8_t *report, ESPNowCommunication::Tracker tracker);
  
  private:
-@@ -54,6 +56,8 @@ private:
+@@ -54,6 +56,9 @@ private:
      
      // Statistics
      unsigned long droppedReports = 0;
 +    uint32_t acceptedUSBTransfers = 0;
 +    uint32_t failedUSBTransfers = 0;
++    uint32_t lastUSBSubmitMicros = 0;
      
      void createRegistrationReport(uint8_t *report, size_t trackerIndex);
  };

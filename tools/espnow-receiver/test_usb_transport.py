@@ -23,6 +23,7 @@ fixture=r'''
 #include <vector>
 uint32_t clockMs=0;
 uint32_t millis() { return clockMs; }
+uint32_t micros() { return clockMs * 1000; }
 struct HIDDevice {
     bool isReady=true, accept=true;
     unsigned attempts=0;
@@ -45,7 +46,7 @@ struct Buffer {
 struct PacketHandling {
     static constexpr size_t reportsPerTransfer=4,reportSize=16,hidTransferSize=64;
     Buffer buffer,priorityBuffer;
-    uint32_t lastSendAttempt=0,acceptedUSBTransfers=0,failedUSBTransfers=0;
+    uint32_t lastSendAttempt=0,acceptedUSBTransfers=0,failedUSBTransfers=0,lastUSBSubmitMicros=0;
     void tick(HIDDevice&);
 };
 class String:public std::string {
@@ -88,15 +89,27 @@ int main() {
     // Failed submission must also preserve both queues for retry.
     hid.isReady=true; hid.accept=false; packets.tick(hid);
     assert(packets.failedUSBTransfers==1 && packets.buffer.size()==1 && packets.priorityBuffer.size()==1);
-    hid.accept=true; packets.tick(hid);
+    hid.accept=true; ++clockMs; packets.tick(hid);
     assert(packets.buffer.size()==0 && packets.priorityBuffer.size()==0);
     auto& last=hid.transfers.back();
     assert(last[0]==255 && last[1]==7 && last[16]==1 && last[17]==7);
     assert(last[32]==0xfe && last[33]==0xff);
     // Ten senders' reports drain through bounded four-report USB frames.
     for(int id=0;id<10;++id) packets.buffer.add(1,id);
-    for(int tick=0;tick<3;++tick) packets.tick(hid);
+    for(int tick=0;tick<3;++tick) { ++clockMs; packets.tick(hid); }
     assert(packets.buffer.size()==0);
+    // Busy endpoint: millions of main-loop calls cannot produce a hot spin.
+    packets.buffer.add(1,0); hid.accept=false;
+    auto failuresBefore=packets.failedUSBTransfers;
+    ++clockMs;
+    for(int i=0;i<100000;++i) packets.tick(hid);
+    assert(packets.failedUSBTransfers-failuresBefore==1);
+    for(int ms=0;ms<20;++ms) {
+        ++clockMs;
+        for(int i=0;i<1000;++i) packets.tick(hid);
+    }
+    assert(packets.failedUSBTransfers-failuresBefore==21);
+    assert(packets.buffer.size()==1);
     ConsoleCommandHandler console;
     Serial.append(std::string(10000,'X')+"\nstatus\n");
     auto before=Serial.reads; console.update();

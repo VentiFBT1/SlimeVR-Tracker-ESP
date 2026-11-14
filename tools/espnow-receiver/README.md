@@ -54,3 +54,12 @@ Console input is bounded to 64 bytes per loop and 256 bytes per command.
 These changes address concrete USB scheduling hazards and protocol mismatch;
 they do not establish the root cause of Windows Code 43. Hardware validation is
 still required, including idle, motion, reconnect and opening/closing diagnostics.
+
+Receiver Test6 paces HID submissions to at most one attempt per millisecond and
+yields the main loop for one RTOS tick. Test5's hardware diagnostics showed
+millions of unsuccessful submissions during a short run; spinning on a busy
+endpoint is unnecessary CPU load. The host regression now calls the real tick
+method 100,000 times with a busy endpoint at one timestamp and requires only one
+submission attempt. Queued reports are retained. Health adds internal chip
+temperature, and the standalone temperature command uses the hybrid USB stream.
+These are targeted scheduling fixes; no hardware-stability claim is made.
