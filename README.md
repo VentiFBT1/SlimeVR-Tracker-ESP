@@ -6,6 +6,8 @@ Requires [SlimeVR Server](https://github.com/SlimeVR/SlimeVR-Server) to work wit
 
 ## Configuration
 
+For the Venti v0.7.4 battery-protection builds, see [Venti firmware variants](VENTI_BUILDS.md). One branch builds both the regular LSM6DSV and ICM-45686 versions.
+
 Firmware configuration is located in the `defines.h` file. For more information on how to configure your firmware, refer to the [Configuring the firmware project section of SlimeVR documentation](https://docs.slimevr.dev/firmware/configuring-project.html).
 
 ## Compatibility
