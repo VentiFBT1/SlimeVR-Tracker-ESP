@@ -1,0 +1,122 @@
+name: One-time Venti branch cleanup
+
+on:
+  push:
+    branches:
+      - test/venti-v074-battery-protection
+    paths:
+      - .github/workflows/venti-branch-cleanup.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Verify both builds and remove only backed-up Venti branches
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_SHA: ${{ github.sha }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          import json
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+
+          repository = "VentiFBT1/SlimeVR-Tracker-ESP"
+          keep = "test/venti-v074-battery-protection"
+          expected = {
+              "fix/venti-v074-handshake-port-test": "711501501323979b51287ff5143bd13ccca82f64",
+              "fix/venti-v074-hardware-config": "725eefb213230b8ce9badacd296c048f1f22441b",
+              "fix/venti-v074-v072-udp-buffer-test": "254d2f372bcecd730093beaa05f90d97d4344bc5",
+              "fix/ventitest-connection-test": "fedefa2787ed74935772b9de54cdc88ea0bed048",
+              "test/venti-espnow": "3b77a46f808a75533a3de307b62d14ef1c1df488",
+              "test/venti-v074-icm45686-battery-protection": "121bfee07e85daeeade48dec5aadc38d99e275fd",
+              "venti-led-test": "7baf1425a31201d8d755899b2532172462c91cd3",
+              "ventitest": "349fea66f8aaa58a8d0183b35be72194625005b7",
+          }
+          if os.environ["GH_REPOSITORY"] != repository or keep in expected or "main" in expected:
+              raise RuntimeError("Unexpected cleanup scope")
+
+          def api(path, method="GET"):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers={
+                      "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+                  method=method,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read()
+                  return json.loads(body) if body else None
+
+          def branches():
+              result = {}
+              page = 1
+              while True:
+                  batch = api(f"branches?per_page=100&page={page}")
+                  result.update({branch["name"]: branch["commit"]["sha"] for branch in batch})
+                  if len(batch) < 100:
+                      return result
+                  page += 1
+
+          def preflight(snapshot):
+              if snapshot.get(keep) != os.environ["KEEP_SHA"]:
+                  raise RuntimeError("Kept branch changed; refusing deletion")
+              for name, sha in expected.items():
+                  if snapshot.get(name) != sha:
+                      raise RuntimeError(f"Branch changed or missing: {name}; refusing deletion")
+
+          before = branches()
+          preflight(before)
+          deadline = time.monotonic() + 900
+          last_status = None
+          while time.monotonic() < deadline:
+              query = urllib.parse.urlencode({"branch": keep, "event": "push", "per_page": 20})
+              runs = api(f"actions/runs?{query}")["workflow_runs"]
+              matches = [run for run in runs if run["name"] == "Build" and run["head_sha"] == os.environ["KEEP_SHA"]]
+              run = max(matches, key=lambda item: item["id"]) if matches else None
+              status = (run["status"], run["conclusion"]) if run else ("waiting", None)
+              if status != last_status:
+                  print(f"Build verification: {status}", flush=True)
+                  last_status = status
+              if run and run["status"] == "completed":
+                  if run["conclusion"] != "success":
+                      raise RuntimeError("Build/format checks did not pass; no branches deleted")
+                  jobs = api(f"actions/runs/{run['id']}/jobs?per_page=100")["jobs"]
+                  if not any(job["name"] == "build" and job["conclusion"] == "success" for job in jobs):
+                      raise RuntimeError("Successful firmware build job not found")
+                  artifacts = api(f"actions/runs/{run['id']}/artifacts")["artifacts"]
+                  if not any(item["name"] == "binaries" and not item["expired"] for item in artifacts):
+                      raise RuntimeError("Firmware binaries artifact not found")
+                  print(f"Verified build: {run['html_url']}", flush=True)
+                  break
+              time.sleep(10)
+          else:
+              raise RuntimeError("Timed out waiting for builds; no branches deleted")
+
+          current = branches()
+          preflight(current)
+          if current != before:
+              raise RuntimeError("Repository branches changed during verification; refusing deletion")
+          for name, sha in expected.items():
+              reference = "git/refs/heads/" + urllib.parse.quote(name, safe="/")
+              if api(reference)["object"]["sha"] != sha:
+                  raise RuntimeError(f"Branch changed immediately before deletion: {name}")
+              if api("git/refs/heads/" + urllib.parse.quote(keep, safe="/"))["object"]["sha"] != os.environ["KEEP_SHA"]:
+                  raise RuntimeError("Kept branch changed; stopping")
+              api(reference, method="DELETE")
+              print(f"Deleted {name} at {sha}", flush=True)
+          after = branches()
+          remaining = {name: sha for name, sha in before.items() if name not in expected}
+          if after != remaining:
+              raise RuntimeError("Final branch verification failed")
+          print(f"Verified: removed {len(expected)} Venti branches; all {len(after)} remaining branch heads preserved.", flush=True)

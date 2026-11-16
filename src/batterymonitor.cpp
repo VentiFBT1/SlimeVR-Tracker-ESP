@@ -125,8 +125,8 @@ void BatteryMonitor::Loop() {
 			if (filteredBatteryVoltage < 0) {
 				filteredBatteryVoltage = voltage;
 			} else {
-				filteredBatteryVoltage += VENTI_BATTERY_FILTER_ALPHA
-					* (voltage - filteredBatteryVoltage);
+				filteredBatteryVoltage
+					+= VENTI_BATTERY_FILTER_ALPHA * (voltage - filteredBatteryVoltage);
 			}
 			statusManager.setStatus(
 				SlimeVR::Status::LOW_BATTERY,

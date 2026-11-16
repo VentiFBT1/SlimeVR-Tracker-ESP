@@ -707,8 +707,8 @@ void Connection::update() {
 	// The server's discovery handshake uses byte 0, not the normal packet
 	// type at byte 3. Handle it before interpreting the normal packet header.
 	// A server may repeat its handshake when another tracker joins.
-	if (len >= 13 && static_cast<ReceivePacketType>(m_Packet[0])
-			== ReceivePacketType::Handshake
+	if (len >= 13
+		&& static_cast<ReceivePacketType>(m_Packet[0]) == ReceivePacketType::Handshake
 		&& memcmp(m_Packet + 1, "Hey OVR =D 5", 12) == 0) {
 		// A second tracker joining may trigger another discovery handshake.
 		// Keep the established server endpoint unchanged while connected.
